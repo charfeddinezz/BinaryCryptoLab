@@ -1,0 +1,53 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution and build artefacts
+build/
+dist/
+*.egg-info/
+*.egg
+wheels/
+*.zip
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test, coverage, and type-checker caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Local report output at the repository root (never ignore the package's
+# src/binarycryptolab/reports/ source directory).
+/reports/
+/*.report.json
+/*.report.csv
+
+# Secrets and local configuration: never commit these
+.env
+.env.*
+.streamlit/secrets.toml
+*.pem
+*.key
+id_rsa
+id_ed25519

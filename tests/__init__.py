@@ -1,0 +1,1 @@
+"""BinaryCryptoLab test suite."""

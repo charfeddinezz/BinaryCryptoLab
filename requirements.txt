@@ -1,0 +1,12 @@
+# BinaryCryptoLab runtime dependencies.
+#
+# The package metadata in pyproject.toml is the source of truth; this file is
+# provided for users who prefer `pip install -r requirements.txt`.
+#
+# Install the project itself with:
+#   pip install .
+# Optional extras:
+#   pip install ".[dev]"   # pytest, hypothesis, ruff, mypy, coverage
+#   pip install ".[gui]"   # Streamlit interface
+
+cryptography>=42,<52
