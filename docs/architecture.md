@@ -14,6 +14,7 @@ library**, and **no private key can reach a report by accident**.
                               v
                 +---------------------------+
                 |    analysis.py            |   use-case orchestration
+                |    forensics.py           |
                 |    reports/               |
                 +-------------+-------------+
                               |
@@ -60,7 +61,8 @@ Dependencies point downwards only. `bitcoin` may use `ecc`, `hashing`,
 | `ecc.py` | secp256k1 domain parameters, scalar validation, public-key derivation/parsing via `cryptography`. |
 | `base58.py` | Base58 and Base58Check encode/decode with constant-time checksum comparison. |
 | `bech32.py` | Bech32/Bech32m checksums and BIP-173/BIP-350 SegWit address encoding. |
-| `bitcoin.py` | Network parameters, P2PKH/P2WPKH derivation, address decoding and validation. |
+| `bitcoin.py` | Network parameters, P2PKH/P2WPKH/P2SH-P2WPKH derivation, the address matrix, and decoding/validation. |
+| `forensics.py` | Deep public-key dissection, structural findings with probabilities, and the scored forecast. |
 | `models/analysis_result.py` | Frozen dataclasses shared by the analysis engines, reports, CLI, and GUI. |
 | `reports/` | Deterministic JSON and long-format CSV rendering plus atomic file writes. |
 | `utils/` | Terminal-safe formatting helpers and stderr logging configuration. |
@@ -80,6 +82,24 @@ Dependencies point downwards only. `bitcoin` may use `ecc`, `hashing`,
    guaranteed JSON-serialisable.
 5. **Reports** render the result to JSON or CSV and write atomically.
 6. **Presentation** prints a table, writes a file, or offers download buttons.
+
+## Public-key forensics
+
+`forensics.py` sits above `bitcoin.py`, `ecc.py`, `hashing.py`, and `statistics.py`
+and never below them: it composes their public results into one immutable
+`PublicKeyDissection`. Nothing in the encodings modules imports it, so the
+dependency graph stays acyclic.
+
+The forecasting layer is deliberately statistical. It computes, per finding, the
+probability that a uniformly random 256-bit value would show the same pattern,
+converts that to surprisal bits, groups correlated findings into evidence
+families, and maps the total to a 0–100 score. No search over scalars exists
+anywhere in the package, and the `recoverable` flag is a hard-coded `False` that
+tests assert.
+
+Every probability has a closed form (`2^-k`, an exact binomial tail computed with
+integer combinatorics, or a documented approximation), which makes the scores
+reproducible and reviewable rather than opaque.
 
 ## Design decisions
 

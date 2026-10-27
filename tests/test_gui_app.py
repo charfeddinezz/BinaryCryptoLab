@@ -33,17 +33,22 @@ class TestInitialRender:
             "Analysis",
             "Hashing",
             "Public key",
+            "Key forensics",
             "Bitcoin address",
         ]
-        assert [area.label for area in app.text_area] == [
-            "Input",
-            "Input to hash",
-            "Public key (hexadecimal)",
-        ]
+        assert sorted(area.label for area in app.text_area) == sorted(
+            [
+                "Input",
+                "Input to hash",
+                "Public key to dissect (hexadecimal)",
+                "Public key (hexadecimal)",
+            ]
+        )
         assert [button.label for button in app.button] == [
             "Analyse",
             "Hash",
             "Derive public key",
+            "Dissect key",
             "Derive address",
         ]
         assert any("Local, educational tool" in block.value for block in app.markdown)
@@ -141,3 +146,61 @@ class TestAddressTab:
         payload = json.loads(json.dumps(result.to_dict()))
         assert payload["bitcoin_address"]["address"] == ADDRESS_P2PKH_G
         assert payload["input"]["type"] == "public_key"
+
+
+class TestForensicsTab:
+    def test_default_dissection(self, app: AppTest) -> None:
+        app.button(key="forensics-run").click()
+        app.run()
+        assert not app.exception
+        result = app.session_state["forensics"]
+        payload = result.forensics
+        assert payload is not None
+        assert payload["public_key"]["compressed_hex"] == PUBKEY_ONE_COMPRESSED
+        assert len(payload["address_matrix"]) == 16
+        assert payload["forecast"]["recoverable"] is False
+        assert payload["input"]["encoding"] == "compressed"
+
+    def test_metrics_and_success_verdict_render(self, app: AppTest) -> None:
+        app.button(key="forensics-run").click()
+        app.run()
+        metrics = {metric.label: metric.value for metric in app.metric}
+        assert metrics["Structure score"] == "0.0/100"
+        assert metrics["Recoverable"] == "no"
+        assert any("uniformly random" in block.value for block in app.success)
+
+    def test_network_subset_changes_the_matrix(self, app: AppTest) -> None:
+        app.multiselect(key="forensics-networks").set_value(["mainnet"])
+        app.button(key="forensics-run").click()
+        app.run()
+        payload = app.session_state["forensics"].forensics
+        assert payload is not None
+        assert len(payload["address_matrix"]) == 4
+        assert {entry["network"] for entry in payload["address_matrix"]} == {"mainnet"}
+
+    def test_deep_depth_adds_representations(self, app: AppTest) -> None:
+        app.selectbox(key="forensics-depth").set_value("deep")
+        app.button(key="forensics-run").click()
+        app.run()
+        payload = app.session_state["forensics"].forensics
+        assert payload is not None
+        assert len(payload["representations"]) > 16
+        assert "sha512(compressed)" in payload["digests"]
+
+    def test_invalid_key_shows_error(self, app: AppTest) -> None:
+        app.text_area(key="forensics-public-key").set_value("not-a-key")
+        app.button(key="forensics-run").click()
+        app.run()
+        assert not app.exception
+        assert any("InvalidPublicKeyError" in error.value for error in app.error)
+        assert "forensics" not in app.session_state
+
+    def test_download_payload_is_json_serialisable(self, app: AppTest) -> None:
+        app.button(key="forensics-run").click()
+        app.run()
+        result = app.session_state["forensics"]
+        payload = json.loads(json.dumps(result.to_dict()))
+        assert payload["public_key_forensics"]["forecast"]["recoverable"] is False
+        assert "private" not in json.dumps(payload["public_key_forensics"]).lower().replace(
+            "private key", ""
+        )

@@ -5,7 +5,9 @@ Scope
 This module derives addresses **from public keys only**:
 
 * P2PKH (legacy, Base58Check, version byte 0x00 / 0x6f),
-* P2WPKH (native SegWit v0, Bech32, witness program 20 bytes).
+* P2WPKH (native SegWit v0, Bech32, witness program 20 bytes),
+* P2SH-P2WPKH (nested SegWit: the witness program is wrapped in a P2SH
+  redeem script, version byte 0x05 / 0xc4).
 
 It also decodes and validates addresses (checksum, version byte, HRP, witness
 version, witness program length) so users can verify what they generated.
@@ -40,12 +42,15 @@ __all__ = [
     "DecodedAddress",
     "Network",
     "address_from_public_key",
+    "address_matrix",
     "decode_address",
     "derive_p2pkh_address",
+    "derive_p2sh_p2wpkh_address",
     "derive_p2wpkh_address",
     "hash160_public_key",
     "is_valid_address",
     "p2pkh_address_from_hash160",
+    "p2sh_address_from_script_hash",
     "p2wpkh_address_from_hash160",
 ]
 
@@ -106,6 +111,7 @@ class AddressType(StrEnum):
 
     P2PKH = "p2pkh"
     P2WPKH = "p2wpkh"
+    P2SH_P2WPKH = "p2sh-p2wpkh"
 
     @classmethod
     def parse(cls, value: str | AddressType) -> AddressType:
@@ -127,12 +133,19 @@ class AddressType(StrEnum):
             "segwit": cls.P2WPKH,
             "bech32": cls.P2WPKH,
             "native-segwit": cls.P2WPKH,
+            "p2sh-p2wpkh": cls.P2SH_P2WPKH,
+            "p2sh_p2wpkh": cls.P2SH_P2WPKH,
+            "p2shp2wpkh": cls.P2SH_P2WPKH,
+            "nested-segwit": cls.P2SH_P2WPKH,
+            "nested": cls.P2SH_P2WPKH,
+            "wrapped-segwit": cls.P2SH_P2WPKH,
         }
         try:
             return aliases[normalized]
         except KeyError as exc:
+            supported = ", ".join(member.value for member in cls)
             raise AddressEncodingError(
-                f"unknown address type {value!r}; supported types: p2pkh, p2wpkh"
+                f"unknown address type {value!r}; supported types: {supported}"
             ) from exc
 
 
@@ -269,6 +282,24 @@ def p2wpkh_address_from_hash160(hash160_digest: bytes, network: str | Network) -
     return encode_segwit_address(selected.bech32_hrp, 0, bytes(hash160_digest))
 
 
+def p2sh_address_from_script_hash(script_hash: bytes, network: str | Network) -> str:
+    """Encode a 20-byte script hash as a Base58Check P2SH address.
+
+    Args:
+        script_hash: ``HASH160`` of the redeem script (20 bytes).
+        network: Target network; selects version byte ``0x05`` or ``0xc4``.
+
+    Raises:
+        AddressEncodingError: The digest length or network is invalid.
+    """
+    if not isinstance(script_hash, (bytes, bytearray)):
+        raise AddressEncodingError("P2SH script hash must be bytes")
+    if len(script_hash) != _HASH160_LENGTH:
+        raise AddressEncodingError("P2SH script hash must be exactly 20 bytes")
+    selected = Network.parse(network)
+    return base58check_encode(bytes([selected.p2sh_version]) + bytes(script_hash))
+
+
 def _load_public_key(public_key_hex: str) -> tuple[PublicKeyInfo, bytes, bytes]:
     public_key = parse_public_key_hex(public_key_hex)
     info = public_key_info_from_hex(public_key_hex)
@@ -364,6 +395,53 @@ def derive_p2wpkh_address(
     )
 
 
+def derive_p2sh_p2wpkh_address(
+    public_key_hex: str, network: str | Network = Network.MAINNET
+) -> AddressInfo:
+    """Derive a nested SegWit (P2SH-P2WPKH) address from a public key.
+
+    The witness program ``0x0014 || HASH160(compressed_key)`` is hashed again and
+    wrapped in a P2SH address, which lets older wallets pay to a SegWit output.
+    Like P2WPKH, this construction requires the compressed public key; an
+    uncompressed key is rejected rather than converted.
+
+    Args:
+        public_key_hex: SEC 1 public key in hexadecimal.
+        network: Target network.
+
+    Returns:
+        Address metadata including the redeem script and locking script.
+
+    Raises:
+        InvalidPublicKeyError: The public key is invalid or uncompressed.
+        AddressEncodingError: The network is unknown.
+        UnsupportedHashError: RIPEMD-160 is unavailable.
+    """
+    selected = Network.parse(network)
+    info, compressed, _ = _load_public_key(public_key_hex)
+    if info.input_encoding != "compressed":
+        raise AddressEncodingError(
+            "P2SH-P2WPKH addresses require a compressed public key; "
+            "supply the 33-byte compressed encoding"
+        )
+    key_hash = hash160(compressed)
+    redeem_script = b"\x00\x14" + key_hash  # OP_0 <20-byte key hash>
+    script_hash = hash160(redeem_script)
+    address = p2sh_address_from_script_hash(script_hash, selected)
+    script = b"\xa9\x14" + script_hash + b"\x87"  # OP_HASH160 <20> OP_EQUAL
+    return AddressInfo(
+        address=address,
+        address_type=AddressType.P2SH_P2WPKH.value,
+        network=selected.value,
+        hash160_hex=script_hash.hex(),
+        public_key_hex=compressed.hex(),
+        public_key_encoding="compressed",
+        witness_version=0,
+        witness_program_hex=key_hash.hex(),
+        script_pubkey_hex=script.hex(),
+    )
+
+
 def address_from_public_key(
     public_key_hex: str,
     *,
@@ -374,7 +452,8 @@ def address_from_public_key(
 
     Args:
         public_key_hex: SEC 1 public key in hexadecimal.
-        address_type: ``"p2pkh"`` or ``"p2wpkh"`` (aliases accepted).
+        address_type: ``"p2pkh"``, ``"p2wpkh"``, or ``"p2sh-p2wpkh"`` (aliases
+            accepted).
         network: Target network.
 
     Returns:
@@ -389,7 +468,9 @@ def address_from_public_key(
     selected_network = Network.parse(network)
     if selected_type is AddressType.P2PKH:
         return derive_p2pkh_address(public_key_hex, selected_network)
-    return derive_p2wpkh_address(public_key_hex, selected_network)
+    if selected_type is AddressType.P2WPKH:
+        return derive_p2wpkh_address(public_key_hex, selected_network)
+    return derive_p2sh_p2wpkh_address(public_key_hex, selected_network)
 
 
 def _decode_base58_address(address: str, selected: Network | None) -> DecodedAddress:
@@ -523,3 +604,49 @@ def is_valid_address(address: str, network: str | Network | None = None) -> bool
     except (AddressEncodingError, InputValidationError):
         return False
     return True
+
+
+def address_matrix(
+    public_key_hex: str,
+    *,
+    networks: tuple[str | Network, ...] | None = None,
+) -> tuple[AddressInfo, ...]:
+    """Derive every supported address for a public key, across all networks.
+
+    Each row states the public-key encoding it was built from, so the
+    compressed-derived rows are explicit rather than silent conversions:
+
+    * ``p2pkh`` from the compressed key,
+    * ``p2pkh`` from the uncompressed key (a different address),
+    * ``p2wpkh`` from the compressed key,
+    * ``p2sh-p2wpkh`` from the compressed key.
+
+    Args:
+        public_key_hex: SEC 1 public key in hexadecimal.
+        networks: Networks to include.  ``None`` uses mainnet, testnet, signet,
+            and regtest in that order.
+
+    Returns:
+        One :class:`AddressInfo` per ``(network, type, encoding)`` combination.
+
+    Raises:
+        InvalidPublicKeyError: The public key is invalid.
+        AddressEncodingError: A network is unknown.
+        UnsupportedHashError: RIPEMD-160 is unavailable.
+    """
+    selected_networks: tuple[str | Network, ...] = (
+        networks
+        if networks is not None
+        else (Network.MAINNET, Network.TESTNET, Network.SIGNET, Network.REGTEST)
+    )
+    public_key = parse_public_key_hex(public_key_hex)
+    compressed_hex = public_key_bytes(public_key, compressed=True).hex()
+    uncompressed_hex = public_key_bytes(public_key, compressed=False).hex()
+    entries: list[AddressInfo] = []
+    for network in selected_networks:
+        selected = Network.parse(network)
+        entries.append(derive_p2pkh_address(compressed_hex, selected))
+        entries.append(derive_p2pkh_address(uncompressed_hex, selected))
+        entries.append(derive_p2wpkh_address(compressed_hex, selected))
+        entries.append(derive_p2sh_p2wpkh_address(compressed_hex, selected))
+    return tuple(entries)

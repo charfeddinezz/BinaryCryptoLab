@@ -423,6 +423,56 @@ class TestBitcoinAddressCommand:
         assert payload["input"]["type"] == "public_key"
 
 
+class TestNestedSegwitCommand:
+    def test_derives_p2sh_p2wpkh(self, cli_runner: CliRunner) -> None:
+        code, out, _ = cli_runner(
+            [
+                "bitcoin-address",
+                "--public-key",
+                PUBKEY_ONE_COMPRESSED,
+                "--type",
+                "p2sh-p2wpkh",
+            ]
+        )
+        assert code == 0
+        assert "3JvL6Ymt8MVWiCNHC7oWU6nLeHNJKLZGLN" in out
+        assert "p2sh-p2wpkh" in out
+        assert "a914bcfeb728b584253d5f3f70bcb780e9ef218a68f487" in out
+
+    def test_uncompressed_key_is_rejected(self, cli_runner: CliRunner) -> None:
+        code, _, err = cli_runner(
+            [
+                "bitcoin-address",
+                "--public-key",
+                PUBKEY_ONE_UNCOMPRESSED,
+                "--type",
+                "p2sh-p2wpkh",
+            ]
+        )
+        assert code == 1
+        assert "compressed" in err
+
+    def test_json_report(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        target = tmp_path / "nested.json"
+        code, _, _ = cli_runner(
+            [
+                "bitcoin-address",
+                "--public-key",
+                PUBKEY_ONE_COMPRESSED,
+                "--type",
+                "p2sh-p2wpkh",
+                "--report-format",
+                "json",
+                "--output",
+                str(target),
+            ]
+        )
+        assert code == 0
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        assert payload["bitcoin_address"]["type"] == "p2sh-p2wpkh"
+        assert payload["bitcoin_address"]["script_pubkey_hex"].startswith("a914")
+
+
 class TestDecodeAddressCommand:
     def test_valid_mainnet(self, cli_runner: CliRunner) -> None:
         code, out, _ = cli_runner(["decode-address", ADDRESS_P2PKH_G])
@@ -456,6 +506,264 @@ class TestDecodeAddressCommand:
         payload = json.loads(out)
         assert payload["bitcoin_address"]["type"] == "p2wpkh"
         assert payload["input"]["type"] == "address"
+
+
+class TestDissectPublicKeyCommand:
+    """The deep dissection command: single key, batch mode, and reports."""
+
+    def test_text_report_sections(self, cli_runner: CliRunner) -> None:
+        code, out, err = cli_runner(["dissect-public-key", "--public-key", PUBKEY_ONE_COMPRESSED])
+        assert code == 0
+        assert err == ""
+        assert "public key dissection" in out
+        assert "Curve verification: all 10 checks passed" in out
+        assert "Address matrix (16)" in out
+        assert "consistent with a uniformly random public key" in out
+        assert "Recoverable     : no" in out
+
+    def test_reports_the_known_addresses(self, cli_runner: CliRunner) -> None:
+        code, out, _ = cli_runner(["dissect-public-key", "--public-key", PUBKEY_ONE_COMPRESSED])
+        assert code == 0
+        assert ADDRESS_P2PKH_G in out
+        assert ADDRESS_P2WPKH_G in out
+        assert "3JvL6Ymt8MVWiCNHC7oWU6nLeHNJKLZGLN" in out
+
+    def test_uncompressed_input_is_accepted(self, cli_runner: CliRunner) -> None:
+        code, out, _ = cli_runner(["dissect-public-key", "--public-key", PUBKEY_ONE_UNCOMPRESSED])
+        assert code == 0
+        assert "uncompressed" in out
+        assert "1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm" in out
+
+    def test_invalid_key_exits_one(self, cli_runner: CliRunner) -> None:
+        code, out, err = cli_runner(["dissect-public-key", "--public-key", "not-hex"])
+        assert code == 1
+        assert out == ""
+        assert err.startswith("error: ")
+        assert "not-hex" not in err
+
+    def test_unknown_network_exits_one(self, cli_runner: CliRunner) -> None:
+        code, _, err = cli_runner(
+            ["dissect-public-key", "--public-key", PUBKEY_ONE_COMPRESSED, "--networks", "moonnet"]
+        )
+        assert code == 1
+        assert "supported networks" in err
+
+    def test_empty_network_list_exits_one(self, cli_runner: CliRunner) -> None:
+        code, _, err = cli_runner(
+            ["dissect-public-key", "--public-key", PUBKEY_ONE_COMPRESSED, "--networks", " , "]
+        )
+        assert code == 1
+        assert "at least one network" in err
+
+    def test_network_subset(self, cli_runner: CliRunner) -> None:
+        code, out, _ = cli_runner(
+            [
+                "dissect-public-key",
+                "--public-key",
+                PUBKEY_ONE_COMPRESSED,
+                "--networks",
+                "mainnet,regtest",
+            ]
+        )
+        assert code == 0
+        assert "Address matrix (8)" in out
+        assert "bcrt1q" in out
+
+    def test_deep_depth_adds_detail(self, cli_runner: CliRunner) -> None:
+        code, out, _ = cli_runner(
+            ["dissect-public-key", "--public-key", PUBKEY_ONE_COMPRESSED, "--depth", "deep"]
+        )
+        assert code == 0
+        assert "compressed (base32)" in out
+        assert "sha512(compressed)" in out
+
+    def test_art_adds_bit_grids(self, cli_runner: CliRunner) -> None:
+        code, out, _ = cli_runner(
+            ["dissect-public-key", "--public-key", PUBKEY_ONE_COMPRESSED, "--art"]
+        )
+        assert code == 0
+        assert "Bit grid (x, most significant bit first)" in out
+        assert "Bit grid (y, most significant bit first)" in out
+
+    def test_json_report(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        target = tmp_path / "dissection.json"
+        code, out, _ = cli_runner(
+            [
+                "dissect-public-key",
+                "--public-key",
+                PUBKEY_ONE_COMPRESSED,
+                "--report-format",
+                "json",
+                "--output",
+                str(target),
+            ]
+        )
+        assert code == 0
+        assert "Report written to" in out
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        assert payload["public_key_forensics"]["curve"] == "secp256k1"
+        assert payload["public_key_forensics"]["input"]["encoding"] == "compressed"
+        assert len(payload["public_key_forensics"]["address_matrix"]) == 16
+        assert payload["public_key_forensics"]["forecast"]["recoverable"] is False
+
+    def test_csv_report(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        target = tmp_path / "dissection.csv"
+        code, _, _ = cli_runner(
+            [
+                "dissect-public-key",
+                "--public-key",
+                PUBKEY_ONE_COMPRESSED,
+                "--report-format",
+                "csv",
+                "--output",
+                str(target),
+            ]
+        )
+        assert code == 0
+        rows = list(csv.reader(io.StringIO(target.read_text(encoding="utf-8"))))
+        assert rows[0] == ["section", "key", "value"]
+        sections = {row[0] for row in rows[1:]}
+        assert "forensics.forecast" in sections
+        assert any(section.startswith("forensics.address_matrix") for section in sections)
+        values = {row[2] for row in rows[1:]}
+        assert ADDRESS_P2PKH_G in values
+
+    def test_refuses_to_overwrite(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        target = tmp_path / "dissection.json"
+        target.write_text("{}", encoding="utf-8")
+        code, _, err = cli_runner(
+            [
+                "dissect-public-key",
+                "--public-key",
+                PUBKEY_ONE_COMPRESSED,
+                "--report-format",
+                "json",
+                "--output",
+                str(target),
+            ]
+        )
+        assert code == 1
+        assert "refusing to overwrite" in err
+        assert target.read_text(encoding="utf-8") == "{}"
+
+    def test_python_api_matches_the_cli(self, cli_runner: CliRunner) -> None:
+        from binarycryptolab.forensics import dissect_public_key
+
+        dissection = dissect_public_key(PUBKEY_ONE_COMPRESSED)
+        code, out, _ = cli_runner(["dissect-public-key", "--public-key", PUBKEY_ONE_COMPRESSED])
+        assert code == 0
+        assert dissection.x.hexadecimal in out
+
+
+class TestDissectBatch:
+    def test_batch_text(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        source = tmp_path / "keys.txt"
+        source.write_text(
+            f"# a comment\n{PUBKEY_ONE_COMPRESSED}\n\n{PUBKEY_ONE_UNCOMPRESSED}\n",
+            encoding="utf-8",
+        )
+        code, out, err = cli_runner(["dissect-public-key", "--input-file", str(source)])
+        assert code == 0
+        assert err == ""
+        assert "public key dissection (batch)" in out
+        assert "2 key(s) analysed" in out
+        assert out.count(ADDRESS_P2PKH_G) == 2
+
+    def test_batch_json_has_indices(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        source = tmp_path / "keys.txt"
+        source.write_text(f"{PUBKEY_ONE_COMPRESSED}\n{PUBKEY_ONE_UNCOMPRESSED}\n", encoding="utf-8")
+        code, out, _ = cli_runner(
+            ["dissect-public-key", "--input-file", str(source), "--report-format", "json"]
+        )
+        assert code == 0
+        payload = json.loads(out)
+        assert [entry["index"] for entry in payload] == [1, 2]
+        assert payload[1]["input"]["encoding"] == "uncompressed"
+
+    def test_batch_csv_has_key_index(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        source = tmp_path / "keys.txt"
+        source.write_text(f"{PUBKEY_ONE_COMPRESSED}\n{PUBKEY_ONE_UNCOMPRESSED}\n", encoding="utf-8")
+        code, out, _ = cli_runner(
+            ["dissect-public-key", "--input-file", str(source), "--report-format", "csv"]
+        )
+        assert code == 0
+        rows = list(csv.reader(io.StringIO(out)))
+        assert rows[0] == ["key_index", "section", "key", "value"]
+        assert {row[0] for row in rows[1:]} == {"1", "2"}
+
+    def test_batch_output_file(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        source = tmp_path / "keys.txt"
+        source.write_text(f"{PUBKEY_ONE_COMPRESSED}\n", encoding="utf-8")
+        target = tmp_path / "out.txt"
+        code, out, _ = cli_runner(
+            ["dissect-public-key", "--input-file", str(source), "--output", str(target)]
+        )
+        assert code == 0
+        assert "Report written to" in out
+        assert "1 key(s) analysed" in target.read_text(encoding="utf-8")
+
+    def test_batch_art_prints_each_key(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        source = tmp_path / "keys.txt"
+        source.write_text(f"{PUBKEY_ONE_COMPRESSED}\n", encoding="utf-8")
+        code, out, _ = cli_runner(["dissect-public-key", "--input-file", str(source), "--art"])
+        assert code == 0
+        assert out.count("Bit grid (x") == 1
+
+    def test_invalid_key_in_batch_names_the_position(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ) -> None:
+        source = tmp_path / "keys.txt"
+        source.write_text(f"{PUBKEY_ONE_COMPRESSED}\ndeadbeef\n", encoding="utf-8")
+        code, _, err = cli_runner(["dissect-public-key", "--input-file", str(source)])
+        assert code == 1
+        assert "#2" in err
+        assert "deadbeef" not in err
+
+    def test_missing_file(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        code, _, err = cli_runner(
+            ["dissect-public-key", "--input-file", str(tmp_path / "absent.txt")]
+        )
+        assert code == 1
+        assert "does not exist" in err
+
+    def test_file_without_keys(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        source = tmp_path / "keys.txt"
+        source.write_text("# only a comment\n\n", encoding="utf-8")
+        code, _, err = cli_runner(["dissect-public-key", "--input-file", str(source)])
+        assert code == 1
+        assert "no public keys" in err
+
+    def test_directory_is_rejected(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        code, _, err = cli_runner(["dissect-public-key", "--input-file", str(tmp_path)])
+        assert code == 1
+        assert "is a directory" in err
+
+    def test_batch_size_is_capped(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        from binarycryptolab.cli import MAX_BATCH_KEYS
+
+        source = tmp_path / "keys.txt"
+        source.write_text(
+            "\n".join([PUBKEY_ONE_COMPRESSED] * (MAX_BATCH_KEYS + 1)) + "\n",
+            encoding="utf-8",
+        )
+        code, _, err = cli_runner(["dissect-public-key", "--input-file", str(source)])
+        assert code == 1
+        assert str(MAX_BATCH_KEYS) in err
+
+    def test_both_sources_are_exclusive(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        source = tmp_path / "keys.txt"
+        source.write_text(f"{PUBKEY_ONE_COMPRESSED}\n", encoding="utf-8")
+        with pytest.raises(SystemExit) as excinfo:
+            cli_runner(
+                [
+                    "dissect-public-key",
+                    "--public-key",
+                    PUBKEY_ONE_COMPRESSED,
+                    "--input-file",
+                    str(source),
+                ]
+            )
+        assert excinfo.value.code == 2
 
 
 class TestDebugMode:

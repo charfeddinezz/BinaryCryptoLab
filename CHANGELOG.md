@@ -4,6 +4,72 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-10-27
+
+### Added
+
+* **Public-key forensics** (`binarycryptolab.forensics`): `dissect_public_key`,
+  `dissect_many`, and immutable models (`PublicKeyDissection`,
+  `CoordinateProfile`, `Representation`, `BitProfile`, `StructureFinding`,
+  `Forecast`, `SearchEstimate`, `AddressMatrixEntry`).
+* Identity dissection: SEC 1 encoding detection (compressed, uncompressed, 64 raw
+  bytes), prefix byte, y parity, x-only BIP-340 form, and both canonical
+  encodings.
+* Coordinate profiles: hex/decimal values, bit length, leading/trailing zeros,
+  Hamming weight with exact two-sided binomial p-value, byte entropy, nibble
+  histogram, base 2⁸/2¹⁶/2³²/2⁶⁴ limb decompositions, little-endian
+  serialisation, distance to the field prime, ASCII bit grids, and printable-ASCII
+  detection.
+* Mirror-point analysis: `-P` (the other point sharing the same x), its compressed
+  encoding, and its mainnet addresses, with an explanation of x-only ambiguity.
+* Keyspace context: group order, distinct-key count, birthday collision bound, and
+  field prime alongside the search-cost table.
+* Curve verification: field-range checks, `y² ≡ x³ + 7 (mod p)`, point-at-infinity
+  rejection, prefix/parity agreement, encoding agreement, length checks, and
+  address round-trips.
+* Sixteen representations per key (hex, binary, decimal, Base58, Base64, Base32,
+  Base64url, spaced hex, `x mod n`, little-endian variants, diagnostic
+  Base58Check) plus SHA-256, SHA-512, double SHA-256, RIPEMD-160, and HASH160
+  digests of several encodings.
+* Structural findings with probabilities: leading/trailing zeros, reduced
+  magnitude, near-prime coordinates, Hamming-weight anomalies, palindromes,
+  repeated blocks, known magic constants, nibble skew, printable runs, and
+  coordinate relations (`x == y`, `y == -x`).
+* Scored forecast: verdict, structure score (evidence-family de-duplication),
+  four ranked generation hypotheses, and a discrete-logarithm cost table for
+  exhaustive, Pollard-rho, and baby-step/giant-step search, with `recoverable`
+  permanently `false`.
+* **P2SH-P2WPKH (nested SegWit)** derivation, `p2sh_address_from_script_hash`,
+  and `address_matrix` covering four address types across four networks.
+* CLI command `dissect-public-key` with `--depth`, `--networks`, `--art`, batch
+  mode (`--input-file`, up to 1000 keys), text/JSON/CSV reports, and overwrite
+  protection.
+* Streamlit tab **Key forensics** with metrics, findings, hypotheses, coordinate
+  and address tables, expandable digest/representation/bit-grid sections, and
+  JSON/CSV downloads.
+* `PublicKeyDissection` is also exported from the package root.
+* Documentation: `docs/public_key_forensics.md` (probability model, scoring,
+  worked examples, limits) and `examples/public_key_forensics.py`.
+* 143 new tests (722 total): forensics engine, probability helpers, CLI single and
+  batch modes, nested SegWit, GUI service, and security invariants.
+
+### Changed
+
+* `AnalysisResult` gained a `forensics` field, serialized as
+  `public_key_forensics`; JSON and CSV reports include it when present.
+* CSV reports now flatten the forensics section into readable rows, and no longer
+  duplicate `input` metadata under `report.*`.
+* `AddressType` gained `P2SH_P2WPKH` with `nested-segwit`, `nested`,
+  `p2sh_p2wpkh`, and `wrapped-segwit` aliases.
+
+### Security
+
+* The forecast never computes, guesses, or searches for a private key, and
+  documents the infeasibility of doing so.
+* Batch error messages name the offending line number, never the key bytes.
+* Forensics output contains no private-key field anywhere; tests assert this for
+  JSON reports, CSV reports, and CLI output.
+
 ## [1.0.0] - 2026-10-27
 
 ### Added

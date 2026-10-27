@@ -66,6 +66,7 @@ examples:
 	$(PYTHON) examples/binary_analysis.py
 	$(PYTHON) examples/hex_analysis.py
 	$(PYTHON) examples/public_key_analysis.py
+	$(PYTHON) examples/public_key_forensics.py
 
 clean:
 	rm -rf build dist .pytest_cache .ruff_cache .mypy_cache .hypothesis htmlcov

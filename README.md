@@ -1,8 +1,8 @@
 # BinaryCryptoLab
 
 **A local Python toolkit for binary and hexadecimal analysis, bit/byte
-statistics, hashing, secp256k1 public-key derivation, and Bitcoin address
-encoding.**
+statistics, hashing, secp256k1 public-key derivation, deep public-key forensics,
+and Bitcoin address encoding.**
 
 BinaryCryptoLab is built for learning, teaching, auditing, and experimentation.
 It validates its input strictly, delegates cryptography to maintained libraries,
@@ -46,9 +46,25 @@ never stores private keys, and never attempts to recover anyone's key.
   compressed/uncompressed SEC 1 encodings via [`cryptography`](https://cryptography.io/).
 - Base58 and Base58Check with constant-time checksum verification.
 - Bech32 and Bech32m (BIP-173/BIP-350) with the official test vectors.
-- P2PKH and P2WPKH address derivation on mainnet, testnet, signet, and regtest.
+- P2PKH, P2WPKH, and P2SH-P2WPKH (nested SegWit) address derivation on mainnet,
+  testnet, signet, and regtest.
 - Address decoding and validation: checksum, version/HRP, witness version, and
   witness program length.
+
+### Public-key forensics and forecasting
+
+- One command that dissects a public key from every public angle: identity,
+  coordinates, bit/byte profiles, limb tables, ASCII bit grids, curve
+  verification, digests, the full 16-entry address matrix, the mirrored point
+  `−P` (same x, different addresses), and keyspace context.
+- Structural findings with computed probabilities (leading/trailing zeros,
+  reduced magnitude, Hamming-weight binomial tails, palindromes, repeated blocks,
+  magic constants, digit skew, printable runs, coordinate relations).
+- A scored forecast: verdict, structure score, four ranked generation
+  hypotheses, and the discrete-logarithm cost of exhaustive, Pollard-rho, and
+  baby-step/giant-step search — with an explicit, permanent statement that no key
+  recovery is implemented or possible.
+- Batch mode: dissect up to 1000 keys from a file and export text, JSON, or CSV.
 
 ### Interfaces and reports
 
@@ -114,7 +130,7 @@ binarycryptolab analyze-binary 101101
 ```
 
 ```text
-BinaryCryptoLab 1.0.0 - binary analysis
+BinaryCryptoLab 1.1.0 - binary analysis
 
 Field            Value
 ---------------  ---------------------------------------------------------------------------------
@@ -144,7 +160,7 @@ binarycryptolab analyze-hex 2D
 ```
 
 ```text
-BinaryCryptoLab 1.0.0 - hexadecimal analysis
+BinaryCryptoLab 1.1.0 - hexadecimal analysis
 
 Field              Value
 -----------------  ---------------------------------------------------------------------------------
@@ -178,6 +194,7 @@ binarycryptolab [--version] [-v|--verbose] [--debug] COMMAND ...
 | `public-key` | Derive a secp256k1 public key from a **test** private scalar. |
 | `bitcoin-address` | Derive a P2PKH or P2WPKH address from a public key. |
 | `decode-address` | Validate and decode a Bitcoin address. |
+| `dissect-public-key` | Deep public-key dissection, address matrix, and structural forecast. |
 
 Run `binarycryptolab COMMAND --help` for the full option list. The complete
 reference, with outputs, is in [`docs/usage.md`](docs/usage.md).
@@ -189,7 +206,7 @@ binarycryptolab hash --algorithm sha256 --hex 2D
 ```
 
 ```text
-BinaryCryptoLab 1.0.0 - hash
+BinaryCryptoLab 1.1.0 - hash
 
 Field          Value
 -------------  ----------------------------------------------------------------
@@ -226,7 +243,7 @@ binarycryptolab public-key --private-key 1 --format compressed
 ```
 
 ```text
-BinaryCryptoLab 1.0.0 - secp256k1 public key
+BinaryCryptoLab 1.1.0 - secp256k1 public key
 
 Field           Value
 --------------  ------------------------------------------------------------------
@@ -265,7 +282,7 @@ binarycryptolab bitcoin-address --public-key "$PUB" --type p2wpkh --network main
 ```
 
 ```text
-BinaryCryptoLab 1.0.0 - Bitcoin address
+BinaryCryptoLab 1.1.0 - Bitcoin address
 
 Field            Value
 ---------------  ------------------------------------------------------------------
@@ -287,7 +304,7 @@ binarycryptolab decode-address 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH
 ```
 
 ```text
-BinaryCryptoLab 1.0.0 - address validation
+BinaryCryptoLab 1.1.0 - address validation
 
 Field              Value
 -----------------  ----------------------------------------
@@ -302,8 +319,66 @@ Checksum, version/HRP, witness version, and program length were validated.
 ```
 
 Supported networks: `mainnet`, `testnet`, `signet`, `regtest`. Supported derived
-types: `p2pkh`, `p2wpkh`. P2WPKH requires a compressed public key; uncompressed
-keys are rejected with an explicit message instead of being converted silently.
+types: `p2pkh`, `p2wpkh`, `p2sh-p2wpkh`. SegWit types require a compressed public
+key; uncompressed keys are rejected with an explicit message instead of being
+converted silently.
+
+
+### Public-key dissection and forecast
+
+```bash
+binarycryptolab dissect-public-key --public-key 0279BE667E...F81798
+```
+
+```text
+BinaryCryptoLab 1.1.0 - public key dissection
+
+Field             Value
+----------------  ------------------------------------------------------------------
+Curve             secp256k1
+Input encoding    compressed
+Prefix byte       0x02
+y parity          even
+Compressed        0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798
+Uncompressed      0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798...
+x-only (BIP-340)  79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798
+Depth             standard
+
+Coordinates
+Coord  Hex                             Bits  Lead 0s  Trail 0s  Weight  Binomial p
+-----  ------------------------------  ----  -------  --------  ------  ----------
+x      79be667ef9dcb...f2815b16f81798  255   1        3         135     0.417
+y      483ada7726a3c...47d08ffb10d4b8  255   1        3         123     0.574
+
+Curve verification: all 10 checks passed
+
+Structural findings (0)
+  none: the key looks like a uniformly random 256-bit point
+
+Forecast
+  Verdict         : consistent with a uniformly random public key
+  Size class      : full 256-bit magnitude
+  Structure score : 0.0/100
+  Recoverable     : no
+```
+
+The full report adds four ranked hypotheses, a discrete-logarithm cost table, the
+16-row address matrix (P2PKH compressed/uncompressed, P2WPKH, P2SH-P2WPKH across
+four networks) with locking scripts, digests, every textual representation, and
+bit/byte profiles.
+
+```bash
+# deep mode adds Base32/Base64url, limb tables, SHA-512, and bit grids
+binarycryptolab dissect-public-key --public-key 02... --depth deep --art
+
+# batch mode: one key per line, CSV export
+binarycryptolab dissect-public-key --input-file keys.txt --report-format csv \
+    --output keys.csv
+```
+
+The forecast is a **statistical reading**, not key recovery. `recoverable` is
+always `no`; the formulas, evidence-family de-duplication, and limits are
+documented in [`docs/public_key_forensics.md`](docs/public_key_forensics.md).
 
 ### Reports
 
@@ -336,7 +411,14 @@ tracebacks unless `--debug` is passed.
 ## Python API
 
 ```python
-from binarycryptolab import analyze, analyze_binary, analyze_hex, hash160, sha256
+from binarycryptolab import (
+    analyze,
+    analyze_binary,
+    analyze_hex,
+    dissect_public_key,
+    hash160,
+    sha256,
+)
 from binarycryptolab.bitcoin import address_from_public_key, decode_address
 from binarycryptolab.ecc import public_key_from_private
 from binarycryptolab.reports import write_json
@@ -357,6 +439,10 @@ assert info.compressed_hex == (
 address = address_from_public_key(info.compressed_hex, address_type="p2wpkh")
 assert address.address == "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
 assert decode_address(address.address).payload_hex == address.hash160_hex
+
+forensics = dissect_public_key(info.compressed_hex)
+assert forensics.forecast.recoverable is False
+assert len(forensics.addresses) == 16
 
 write_json(analyze("binary", "101101"), "reports/binary.json")
 ```
@@ -382,12 +468,13 @@ The CLI works identically without Streamlit.
 
 ## Examples
 
-Three runnable scripts live in [`examples/`](examples):
+Four runnable scripts live in [`examples/`](examples):
 
 ```bash
 python examples/binary_analysis.py
 python examples/hex_analysis.py
 python examples/public_key_analysis.py
+python examples/public_key_forensics.py
 ```
 
 Or with make:
@@ -442,6 +529,7 @@ BinaryCryptoLab/
 │   ├── analysis.py  binary_utils.py  hex_utils.py  bit_operations.py
 │   ├── byte_operations.py  statistics.py
 │   ├── hashing.py  ecc.py  bitcoin.py  base58.py  bech32.py
+│   ├── forensics.py
 │   ├── models/
 │   │   ├── __init__.py
 │   │   └── analysis_result.py
@@ -457,13 +545,15 @@ BinaryCryptoLab/
 │   ├── test_binary_utils.py  test_hex_utils.py
 │   ├── test_bit_operations.py  test_byte_operations.py  test_statistics.py
 │   ├── test_hashing.py  test_ecc.py  test_base58.py  test_bech32.py
-│   ├── test_bitcoin.py  test_reports.py  test_cli.py
+│   ├── test_bitcoin.py  test_forensics.py  test_reports.py  test_cli.py
+│   ├── test_security.py
 │   └── test_gui.py  test_gui_app.py
 ├── examples/
-│   ├── binary_analysis.py  hex_analysis.py  public_key_analysis.py
+│   ├── binary_analysis.py  hex_analysis.py
+│   ├── public_key_analysis.py  public_key_forensics.py
 ├── docs/
 │   ├── architecture.md  usage.md  cryptography.md
-│   ├── bitcoin_addresses.md  security.md
+│   ├── bitcoin_addresses.md  public_key_forensics.md  security.md
 └── .github/workflows/tests.yml
 ```
 
@@ -486,22 +576,27 @@ BinaryCryptoLab/
   extension points.
 - [Cryptography](docs/cryptography.md) — hashing vs encryption vs encoding,
   secp256k1 parameters, encodings, and failure behaviour.
-- [Bitcoin addresses](docs/bitcoin_addresses.md) — P2PKH/P2WPKH derivation,
-  networks, scriptPubKeys, vectors, and limitations.
+- [Bitcoin addresses](docs/bitcoin_addresses.md) — P2PKH/P2WPKH/P2SH-P2WPKH
+  derivation, networks, scriptPubKeys, vectors, and limitations.
+- [Public-key forensics](docs/public_key_forensics.md) — every measured angle, the
+  probability model, the evidence-family score, and the hard limits.
 - [Security](docs/security.md) — threat model, non-goals, and safe-use
   checklist.
 - [Usage](docs/usage.md) — complete CLI reference and Python API examples.
 
 ## Known limitations
 
-- Only P2PKH and P2WPKH addresses are **derived**. P2SH, P2WSH, and Taproot-style
-  outputs can be decoded and validated but not created.
+- Only P2PKH, P2WPKH, and P2SH-P2WPKH addresses are **derived**. Generic P2SH,
+  P2WSH, and Taproot-style outputs can be decoded and validated but not created.
 - No WIF encoding, BIP-32/39 derivation, signing, PSBT, or keystore support.
 - No blockchain access: balances and history are out of scope.
 - RIPEMD-160 depends on the OpenSSL build; unavailable backends cause a clear
   error.
 - The tool cannot detect whether a supplied key controls funds. Use synthetic
   values.
+- The structural forecast cannot confirm or refute that a key corresponds to a
+  small scalar: that would require solving the discrete logarithm, which this
+  project does not attempt. Probabilities assume uniformly random 256-bit values.
 - Reports you export may contain the hexadecimal data you supplied. Treat them
   accordingly.
 

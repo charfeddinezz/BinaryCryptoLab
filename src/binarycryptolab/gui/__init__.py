@@ -12,6 +12,7 @@ from .service import (
     address_result,
     analyse,
     download_payloads,
+    forensic_result,
     hash_result,
     public_key_result,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "address_result",
     "analyse",
     "download_payloads",
+    "forensic_result",
     "hash_result",
     "public_key_result",
 ]

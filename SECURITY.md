@@ -33,6 +33,15 @@ Please **do not** open a public issue for security problems.
 You can expect an initial response within a reasonable time. Please allow time
 for a fix and a release before public disclosure.
 
+## Boundaries of the public-key forensics feature
+
+The `dissect-public-key` command and the `Key forensics` tab analyse **public**
+data only. They do not brute-force, guess, or recover private keys, and they do
+not implement baby-step/giant-step, Pollard rho, or any other discrete-logarithm
+attack. The forecast reports probabilities and search costs so that users can
+reason about key strength; its `recoverable` field is always `false`. Claims that
+this feature "finds" a private key are false.
+
 ## Security properties
 
 * No network access from the package.

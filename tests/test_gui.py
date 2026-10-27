@@ -155,6 +155,57 @@ class TestDownloads:
         assert "c0ffee" not in payloads["csv"].lower()
 
 
+class TestForensicsService:
+    def test_default_dissection(self) -> None:
+        result = service.forensic_result(PUBKEY_ONE_COMPRESSED)
+        assert result.forensics is not None
+        payload = result.forensics
+        assert payload["public_key"]["compressed_hex"] == PUBKEY_ONE_COMPRESSED
+        assert len(payload["address_matrix"]) == 16
+        assert payload["forecast"]["recoverable"] is False
+        assert result.input_type == "public_key"
+
+    def test_network_subset(self) -> None:
+        result = service.forensic_result(PUBKEY_ONE_COMPRESSED, networks=("mainnet",))
+        assert result.forensics is not None
+        assert len(result.forensics["address_matrix"]) == 4
+
+    def test_deep_depth(self) -> None:
+        result = service.forensic_result(PUBKEY_ONE_COMPRESSED, depth="deep")
+        assert result.forensics is not None
+        assert "sha512(compressed)" in result.forensics["digests"]
+
+    def test_unknown_depth(self) -> None:
+        with pytest.raises(ValueError, match="depth"):
+            service.forensic_result(PUBKEY_ONE_COMPRESSED, depth="ultra")
+
+    def test_empty_network_selection(self) -> None:
+        with pytest.raises(ValueError, match="at least one network"):
+            service.forensic_result(PUBKEY_ONE_COMPRESSED, networks=())
+
+    def test_unknown_network(self) -> None:
+        with pytest.raises(AddressEncodingError):
+            service.forensic_result(PUBKEY_ONE_COMPRESSED, networks=("moonnet",))
+
+    def test_invalid_key(self) -> None:
+        with pytest.raises(InvalidPublicKeyError):
+            service.forensic_result("00")
+
+    def test_download_payload_contains_no_private_material(self) -> None:
+        result = service.forensic_result(PUBKEY_ONE_COMPRESSED)
+        payloads = service.download_payloads(result)
+        lowered = payloads["json"].lower()
+        assert "private_key" not in lowered
+        assert '"recoverable": false' in lowered
+        assert payloads["csv"].startswith("section,key,value\n")
+        assert "forensics" in payloads["csv"]
+
+    def test_exported_through_package_namespace(self) -> None:
+        import binarycryptolab.gui as gui_package
+
+        assert gui_package.forensic_result is service.forensic_result
+
+
 class TestLauncher:
     def test_missing_streamlit_is_reported(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

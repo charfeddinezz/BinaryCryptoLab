@@ -68,14 +68,31 @@ OP_0 <20-byte key hash>
 `decode_address` checks:
 
 * **Base58Check**: checksum, 21-byte payload length, known version byte, and
-  network match when a network was supplied.
+  network match when a network was supplied. P2SH payloads are reported as
+  `p2sh`; distinguishing nested SegWit from a generic P2SH script would require
+  the redeem script, which an address does not carry.
 * **Bech32/Bech32m**: valid checksum, no mixed case, matching HRP, witness
   version `0..16`, witness program length `2..40`, version-0 length of 20 or 32,
   correct checksum variant for the version, and canonical padding.
 
-Decoding recognises P2PKH, P2SH, P2WPKH, P2WSH, and `witness_vN` outputs. P2SH,
-P2WSH, and Taproot-style outputs are **decode-only**: this project derives only
-P2PKH and P2WPKH.
+Decoding recognises P2PKH, P2SH, P2WPKH, P2WSH, and `witness_vN` outputs. Generic
+P2SH, P2WSH, and Taproot-style outputs are **decode-only**: this project derives
+P2PKH, P2WPKH, and P2SH-P2WPKH.
+
+### P2SH-P2WPKH (nested SegWit)
+
+For wallets that cannot pay to Bech32 addresses, the witness program is wrapped in
+a P2SH redeem script:
+
+```
+redeemScript = OP_0 <20-byte key hash>        (0x0014 || hash160)
+scriptHash   = HASH160(redeemScript)
+address      = Base58Check(0x05 || scriptHash)      (0xc4 on test networks)
+scriptPubKey = OP_HASH160 <20-byte scriptHash> OP_EQUAL   (a914...87)
+```
+
+The key must be compressed. Nested SegWit pays a P2SH address whose redeem script
+contains the witness program, so older wallets can spend it.
 
 ## Known-answer vectors
 
@@ -89,6 +106,8 @@ Public scalar `1` (the generator point `G`), compressed public key
 | P2PKH | testnet | `mrCDrCybB6J1vRfbwM5hemdJz73FwDBC8r` |
 | P2WPKH | testnet | `tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx` |
 | P2WPKH | regtest | `bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080` |
+| P2SH-P2WPKH | mainnet | `3JvL6Ymt8MVWiCNHC7oWU6nLeHNJKLZGLN` |
+| P2SH-P2WPKH | testnet / signet | `2NAUYAHhujozruyzpsFRP63mbrdaU5wnEpN` |
 
 The same point in uncompressed form gives the P2PKH address
 `1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm`.

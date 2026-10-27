@@ -18,8 +18,9 @@ from typing import Any
 
 from ..analysis import analyze, attach_hashes
 from ..binary_utils import binary_to_bytes
-from ..bitcoin import address_from_public_key
+from ..bitcoin import Network, address_from_public_key
 from ..ecc import public_key_from_private, public_key_info_from_hex
+from ..forensics import ALL_NETWORKS, DEPTH_LEVELS, dissect_public_key
 from ..hashing import HashAlgorithm, hash_bytes
 from ..hex_utils import hex_to_bytes
 from ..models.analysis_result import REDACTED, AnalysisResult
@@ -30,6 +31,7 @@ __all__ = [
     "address_result",
     "analyse",
     "download_payloads",
+    "forensic_result",
     "hash_result",
     "public_key_result",
 ]
@@ -182,3 +184,46 @@ def download_payloads(result: AnalysisResult) -> dict[str, Any]:
         private scalar that the model itself does not hold.
     """
     return {"json": render_json(result), "csv": render_csv(result)}
+
+
+def forensic_result(
+    public_key_hex: str,
+    *,
+    networks: tuple[str, ...] | None = None,
+    depth: str = "standard",
+) -> AnalysisResult:
+    """Dissect a public key from every public angle.
+
+    Args:
+        public_key_hex: SEC 1 public key in hexadecimal.
+        networks: Network names for the address matrix.  ``None`` uses all four.
+        depth: ``"standard"`` or ``"deep"``.
+
+    Returns:
+        A report-ready result whose ``forensics`` section holds the full
+        dissection.  Only public data is present, so the result is safe to
+        download.
+
+    Raises:
+        InvalidPublicKeyError: The public key is invalid.
+        ValueError: The depth is unknown or no network was selected.
+    """
+    if depth not in DEPTH_LEVELS:
+        raise ValueError("depth must be 'standard' or 'deep'")
+    selected = ALL_NETWORKS if networks is None else tuple(Network.parse(item) for item in networks)
+    if not selected:
+        raise ValueError("select at least one network")
+    dissection = dissect_public_key(public_key_hex, networks=selected, depth=depth)
+    payload = dissection.as_dict()
+    return AnalysisResult(
+        input_type="public_key",
+        original_input=public_key_hex.strip(),
+        normalized_input=dissection.input_hex,
+        public_key=payload["public_key"],
+        forensics=payload,
+        warnings=(
+            "The forecast is a statistical reading of a public key, not key recovery.",
+            "No blockchain data was queried; ownership, balance, and history are unknown.",
+        ),
+        extra={"depth": depth, "networks": [network.value for network in selected]},
+    )

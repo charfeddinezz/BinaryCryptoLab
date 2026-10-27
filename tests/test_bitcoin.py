@@ -13,12 +13,15 @@ from binarycryptolab.bitcoin import (
     AddressType,
     Network,
     address_from_public_key,
+    address_matrix,
     decode_address,
     derive_p2pkh_address,
+    derive_p2sh_p2wpkh_address,
     derive_p2wpkh_address,
     hash160_public_key,
     is_valid_address,
     p2pkh_address_from_hash160,
+    p2sh_address_from_script_hash,
     p2wpkh_address_from_hash160,
 )
 from binarycryptolab.ecc import public_key_from_private
@@ -171,6 +174,89 @@ class TestDerivation:
         assert not any("private" in key for key in payload)
         assert payload["address"] == ADDRESS_P2PKH_G
         assert payload["notes"]
+
+
+class TestNestedSegwit:
+    """P2SH-P2WPKH derivation and the full address matrix."""
+
+    def test_known_mainnet_address(self) -> None:
+        info = derive_p2sh_p2wpkh_address(PUBKEY_ONE_COMPRESSED)
+        assert info.address == "3JvL6Ymt8MVWiCNHC7oWU6nLeHNJKLZGLN"
+        assert info.address_type == "p2sh-p2wpkh"
+        assert info.public_key_encoding == "compressed"
+        assert info.witness_version == 0
+        assert info.witness_program_hex == HASH160_OF_G
+        assert info.hash160_hex != HASH160_OF_G  # this is the redeem-script hash
+
+    def test_script_pubkey_shape(self) -> None:
+        info = derive_p2sh_p2wpkh_address(PUBKEY_ONE_COMPRESSED)
+        assert info.script_pubkey_hex == f"a914{info.hash160_hex}87"
+        assert len(info.script_pubkey_hex) == 46
+
+    def test_redeem_script_hash_is_hash160_of_the_witness_program(self) -> None:
+        from binarycryptolab.hashing import hash160
+
+        info = derive_p2sh_p2wpkh_address(PUBKEY_ONE_COMPRESSED)
+        redeem = b"\x00\x14" + bytes.fromhex(info.witness_program_hex or "")
+        assert redeem == b"\x00\x14" + bytes.fromhex(HASH160_OF_G)
+        assert hash160(redeem).hex() == info.hash160_hex
+
+    def test_requires_compressed_key(self) -> None:
+        with pytest.raises(AddressEncodingError, match="compressed"):
+            derive_p2sh_p2wpkh_address(PUBKEY_ONE_UNCOMPRESSED)
+
+    def test_networks(self) -> None:
+        assert (
+            derive_p2sh_p2wpkh_address(PUBKEY_ONE_COMPRESSED, "testnet").address
+            == "2NAUYAHhujozruyzpsFRP63mbrdaU5wnEpN"
+        )
+        mainnet = derive_p2sh_p2wpkh_address(PUBKEY_ONE_COMPRESSED, "mainnet").address
+        testnet = derive_p2sh_p2wpkh_address(PUBKEY_ONE_COMPRESSED, "testnet").address
+        assert mainnet.startswith("3") and testnet.startswith("2")
+
+    def test_dispatch_through_address_from_public_key(self) -> None:
+        for alias in ("p2sh-p2wpkh", "nested-segwit", "nested"):
+            info = address_from_public_key(PUBKEY_ONE_COMPRESSED, address_type=alias)
+            assert info.address == "3JvL6Ymt8MVWiCNHC7oWU6nLeHNJKLZGLN"
+
+    def test_decodes_as_p2sh(self) -> None:
+        info = derive_p2sh_p2wpkh_address(PUBKEY_ONE_COMPRESSED)
+        decoded = decode_address(info.address)
+        assert decoded.address_type == "p2sh"
+        assert decoded.payload_hex == info.hash160_hex
+        assert decoded.network == "mainnet"
+
+    def test_p2sh_address_from_script_hash(self) -> None:
+        info = derive_p2sh_p2wpkh_address(PUBKEY_ONE_COMPRESSED)
+        rebuilt = p2sh_address_from_script_hash(bytes.fromhex(info.hash160_hex), "mainnet")
+        assert rebuilt == info.address
+        with pytest.raises(AddressEncodingError):
+            p2sh_address_from_script_hash(b"\x00" * 19, "mainnet")
+        with pytest.raises(AddressEncodingError):
+            p2sh_address_from_script_hash("00" * 20, "mainnet")  # type: ignore[arg-type]
+
+    def test_matrix_covers_every_combination(self) -> None:
+        matrix = address_matrix(PUBKEY_ONE_COMPRESSED)
+        assert len(matrix) == 16
+        combinations = {
+            (entry.network, entry.address_type, entry.public_key_encoding) for entry in matrix
+        }
+        assert len(combinations) == 16
+        assert {entry.address_type for entry in matrix} == {"p2pkh", "p2wpkh", "p2sh-p2wpkh"}
+
+    def test_matrix_addresses_are_all_valid(self) -> None:
+        for entry in address_matrix(PUBKEY_ONE_COMPRESSED):
+            decoded = decode_address(entry.address, entry.network)
+            assert decoded.payload_hex == entry.hash160_hex
+
+    def test_matrix_network_subset(self) -> None:
+        matrix = address_matrix(PUBKEY_ONE_COMPRESSED, networks=("testnet",))
+        assert len(matrix) == 4
+        assert {entry.network for entry in matrix} == {"testnet"}
+
+    def test_matrix_rejects_invalid_key(self) -> None:
+        with pytest.raises(InvalidPublicKeyError):
+            address_matrix("02")
 
 
 class TestDecoding:

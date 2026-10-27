@@ -334,3 +334,53 @@ def test_public_key_helpers_never_return_the_scalar() -> None:
 
     parsed = public_key_info_from_hex(info.compressed_hex)
     _assert_no_scalar(json.dumps(parsed.as_dict()))
+
+
+# ---------------------------------------------------------------------------
+# Public-key forensics
+# ---------------------------------------------------------------------------
+
+
+def test_forensics_never_contains_private_material() -> None:
+    from binarycryptolab.forensics import dissect_public_key
+
+    payload = dissect_public_key(
+        "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+    ).as_dict()
+    text = json.dumps(payload).lower()
+    assert "private_key" not in text
+    assert "scalar_value" not in text
+    assert payload["forecast"]["recoverable"] is False
+
+
+def test_forensics_cli_report_is_safe(cli_runner: CliRunner, tmp_path: Path) -> None:
+    target = tmp_path / "dissection.json"
+    run = cli_runner(
+        [
+            "dissect-public-key",
+            "--public-key",
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            "--report-format",
+            "json",
+            "--output",
+            str(target),
+        ]
+    )
+    assert run[0] == 0
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload["public_key_forensics"]["forecast"]["recoverable"] is False
+    assert "does not compute private keys" in " ".join(
+        payload["public_key_forensics"]["forecast"]["recommendations"]
+    )
+
+
+def test_forensics_batch_error_hides_key_bytes(cli_runner: CliRunner, tmp_path: Path) -> None:
+    source = tmp_path / "keys.txt"
+    source.write_text(
+        "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\ndeadbeefdeadbeef\n",
+        encoding="utf-8",
+    )
+    run = cli_runner(["dissect-public-key", "--input-file", str(source)])
+    assert run[0] == 1
+    assert "deadbeefdeadbeef" not in run[2]
+    assert "#2" in run[2]

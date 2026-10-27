@@ -2,7 +2,7 @@
 
 This guide covers installation, every command, every option, the Python API, and
 the optional graphical interface. All commands and outputs shown here were run
-against version 1.0.0.
+against version 1.1.0.
 
 ## Installation
 
@@ -48,9 +48,10 @@ COMMAND
   analyze-binary   analyse a binary string
   analyze-hex      analyse a hexadecimal string
   hash             hash bytes, text, or a file
-  public-key       derive a secp256k1 public key from a TEST private scalar
-  bitcoin-address  derive a Bitcoin address from a public key
-  decode-address   decode and validate a Bitcoin address
+  public-key        derive a secp256k1 public key from a TEST private scalar
+  bitcoin-address   derive a Bitcoin address from a public key
+  decode-address    decode and validate a Bitcoin address
+  dissect-public-key  dissect a public key and forecast its structure
 ```
 
 Global options must appear **before** the command:
@@ -89,7 +90,7 @@ binarycryptolab analyze-binary 101101
 ```
 
 ```text
-BinaryCryptoLab 1.0.0 - binary analysis
+BinaryCryptoLab 1.1.0 - binary analysis
 
 Field            Value
 ---------------  ---------------------------------------------------------------------------------
@@ -135,7 +136,7 @@ binarycryptolab analyze-hex 2d
 ```
 
 ```text
-BinaryCryptoLab 1.0.0 - hexadecimal analysis
+BinaryCryptoLab 1.1.0 - hexadecimal analysis
 
 Field              Value
 -----------------  ---------------------------------------------------------------------------------
@@ -182,7 +183,7 @@ binarycryptolab hash --algorithm sha256 --hex 2D
 ```
 
 ```text
-BinaryCryptoLab 1.0.0 - hash
+BinaryCryptoLab 1.1.0 - hash
 
 Field          Value
 -------------  ----------------------------------------------------------------
@@ -232,7 +233,7 @@ binarycryptolab public-key --private-key 1 --format compressed
 ```
 
 ```text
-BinaryCryptoLab 1.0.0 - secp256k1 public key
+BinaryCryptoLab 1.1.0 - secp256k1 public key
 
 Field           Value
 --------------  ------------------------------------------------------------------
@@ -272,7 +273,7 @@ Notes:
 
 ```text
 binarycryptolab bitcoin-address --public-key HEX
-                                [--type {p2pkh,p2wpkh}]
+                                [--type {p2pkh,p2wpkh,p2sh-p2wpkh}]
                                 [--network {mainnet,testnet,regtest,signet}]
                                 [--report-format {text,json,csv}]
                                 [--output PATH] [--overwrite]
@@ -284,7 +285,7 @@ binarycryptolab bitcoin-address --public-key "$PUB" --type p2wpkh --network main
 ```
 
 ```text
-BinaryCryptoLab 1.0.0 - Bitcoin address
+BinaryCryptoLab 1.1.0 - Bitcoin address
 
 Field            Value
 ---------------  ------------------------------------------------------------------
@@ -307,8 +308,8 @@ Warnings:
 
 Notes:
 
-* P2WPKH requires a compressed public key. Supplying the uncompressed form exits
-  with code 1 and a specific message.
+* P2WPKH and P2SH-P2WPKH require a compressed public key. Supplying the
+  uncompressed form exits with code 1 and a specific message.
 * P2PKH accepts both encodings and records which one was used.
 * No blockchain query is performed. The output never claims that an address has
   funds.
@@ -326,7 +327,7 @@ binarycryptolab decode-address 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH
 ```
 
 ```text
-BinaryCryptoLab 1.0.0 - address validation
+BinaryCryptoLab 1.1.0 - address validation
 
 Field              Value
 -----------------  ----------------------------------------
@@ -348,6 +349,96 @@ Checksum, version/HRP, witness version, and program length were validated.
 * P2SH, P2WSH, and witness-v1+ outputs are recognised for validation but are not
   derived by this tool.
 
+
+## dissect-public-key
+
+```text
+binarycryptolab dissect-public-key (--public-key HEX | --input-file PATH)
+                                  [--depth {standard,deep}]
+                                  [--networks LIST] [--art]
+                                  [--report-format {text,json,csv}]
+                                  [--output PATH] [--overwrite]
+```
+
+```bash
+binarycryptolab dissect-public-key --public-key 0279BE667E...F81798
+```
+
+```text
+BinaryCryptoLab 1.1.0 - public key dissection
+
+Field             Value
+----------------  ------------------------------------------------------------------
+Curve             secp256k1
+Input encoding    compressed
+Prefix byte       0x02
+y parity          even
+Compressed        0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798
+Uncompressed      0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798...
+x-only (BIP-340)  79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798
+Depth             standard
+
+Coordinates
+Coord  Hex                             Bits  Lead 0s  Trail 0s  Weight  Binomial p
+-----  ------------------------------  ----  -------  --------  ------  ----------
+x      79be667ef9dcb...f2815b16f81798  255   1        3         135     0.417
+y      483ada7726a3c...47d08ffb10d4b8  255   1        3         123     0.574
+
+Curve verification: all 10 checks passed
+
+Structural findings (0)
+  none: the key looks like a uniformly random 256-bit point
+
+Forecast
+  Verdict         : consistent with a uniformly random public key
+  Size class      : full 256-bit magnitude
+  Structure score : 0.0/100
+  Recoverable     : no
+```
+
+The report continues with the hypotheses, the discrete-logarithm cost table, the
+16-row address matrix, digests, representations, and bit profiles. Run
+`--depth deep` for extra encodings, limb tables, SHA-512 digests, and bit grids
+(`--art` prints the grids in text mode).
+
+Options:
+
+| Option | Meaning |
+| --- | --- |
+| `--public-key HEX` | A single SEC 1 public key (compressed, uncompressed, or 64 raw bytes). |
+| `--input-file PATH` | Batch mode: one key per line; blank lines and `#` comments are skipped; at most 1000 keys. |
+| `--depth` | `standard` (default) or `deep`. |
+| `--networks` | Comma-separated subset of `mainnet,testnet,signet,regtest`. |
+| `--art` | Include ASCII bit grids in the text report. |
+| `--report-format` | `text` (default), `json`, or `csv`. |
+| `--output` / `--overwrite` | Write to a file; existing files are protected. |
+
+Batch mode with `--report-format csv` emits `key_index,section,key,value` rows so
+a spreadsheet can hold hundreds of keys; `--report-format json` emits a JSON array
+with an `index` field per key.
+
+### Reading the forecast
+
+The score is a statistical reading of the key's structure, not key recovery. See
+[`public_key_forensics.md`](public_key_forensics.md) for the exact formulas, the
+evidence-family de-duplication, and the hypothesis weights. `recoverable` is
+always `false`: BinaryCryptoLab does not attack the discrete logarithm.
+
+### Python API
+
+```python
+from binarycryptolab import dissect_public_key
+
+dissection = dissect_public_key(
+    "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+    depth="deep",
+)
+print(dissection.forecast.structure_score)   # 0.0
+print(dissection.x.leading_zero_bits)        # 1
+print(dissection.addresses[0].address)       # 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH
+print(dissection.as_dict()["forecast"]["recoverable"])  # False
+```
+
 ## Reports
 
 All report-capable commands share these options:
@@ -366,13 +457,14 @@ binarycryptolab public-key --private-key 1 --report-format json --output reports
 
 JSON reports contain the application name and version, a UTC timestamp, the
 input type, non-sensitive input, analysis sections, hashes, public key and
-address data when present, warnings, and security notes. CSV reports use a
+address data when present, the `public_key_forensics` section for dissections,
+warnings, and security notes. CSV reports use a
 long-format table:
 
 ```csv
 section,key,value
 application,name,BinaryCryptoLab
-application,version,1.0.0
+application,version,1.1.0
 application,generated_at_utc,2026-10-27T20:25:48Z
 input,type,hex
 input,original,2d
@@ -465,9 +557,11 @@ Extra arguments are forwarded to Streamlit, for example:
 binarycryptolab-gui --server.port=8600
 ```
 
-The interface provides analysis, hashing, public-key derivation, and address
-derivation tabs, with JSON and CSV download buttons. It performs no network
-requests, and it never stores a private scalar in a downloadable result.
+The interface provides analysis, hashing, public-key derivation, **key
+forensics**, and address derivation tabs, with JSON and CSV download buttons. The
+forensics tab exposes depth, network selection, bit grids, findings, hypotheses,
+the mirror point, and the keyspace table. It performs no network requests, and it
+never stores a private scalar in a downloadable result.
 
 ## Troubleshooting
 
@@ -478,3 +572,5 @@ requests, and it never stores a private scalar in a downloadable result.
 | `error: refusing to overwrite existing file` | Pass `--overwrite` or choose another path. |
 | `unexpected error: ...` | Re-run with `--debug` before the command for a traceback and report the issue. |
 | GUI shows "requires Streamlit" | Install the optional extra: `python -m pip install -e ".[gui]"`. |
+| `error: public key #N is invalid` | Batch dissection names the failing line; fix or remove that line. |
+| `error: input file contains more than 1000 keys` | Split the file into batches of at most 1000 keys. |

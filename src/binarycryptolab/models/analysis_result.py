@@ -226,6 +226,10 @@ class AnalysisResult:
         hashes: Optional hash results requested by the user.
         public_key: Optional public key information (never private).
         address: Optional Bitcoin address information.
+        forensics: Optional deep public-key dissection produced by
+            :func:`binarycryptolab.forensics.dissect_public_key`.  Contains only
+            public data: coordinates, encodings, digests, addresses, structural
+            findings, and a forecast.
         warnings: Human-readable validation and safety notes.
         app_name: Application name recorded in reports.
         app_version: Application version recorded in reports.
@@ -241,6 +245,7 @@ class AnalysisResult:
     hashes: tuple[HashDigest, ...] = ()
     public_key: dict[str, Any] | None = None
     address: dict[str, Any] | None = None
+    forensics: dict[str, Any] | None = None
     warnings: tuple[str, ...] = ()
     app_name: str = APP_NAME
     app_version: str = __version__
@@ -283,11 +288,13 @@ class AnalysisResult:
             "hashes": [digest.as_dict() for digest in self.hashes],
             "public_key": self.public_key,
             "bitcoin_address": self.address,
+            "public_key_forensics": self.forensics,
             "warnings": list(self.warnings),
             "security_notes": [
                 "This report contains no private keys.",
                 "A public key and an address are not interchangeable.",
                 "Address derivation does not prove ownership or balance.",
+                "Structural forecasts are statistical; they never recover a private key.",
             ],
             "extra": self.extra,
         }

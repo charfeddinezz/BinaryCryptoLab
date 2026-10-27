@@ -20,7 +20,10 @@ details.
 from __future__ import annotations
 
 import argparse
+import csv
 import getpass
+import io
+import json
 import sys
 import traceback
 from collections.abc import Callable
@@ -30,7 +33,7 @@ from typing import Final
 from ._version import __version__
 from .analysis import analyze, attach_hashes
 from .binary_utils import binary_to_bytes
-from .bitcoin import address_from_public_key, decode_address
+from .bitcoin import Network, address_from_public_key, decode_address
 from .config import APP_NAME, EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE, MAX_FILE_HASH_BYTES
 from .ecc import (
     CURVE_ORDER,
@@ -44,12 +47,20 @@ from .exceptions import (
     InvalidPrivateKeyError,
     ReportGenerationError,
 )
+from .forensics import (
+    ALL_NETWORKS,
+    DEPTH_LEVELS,
+    PublicKeyDissection,
+    dissect_many,
+    dissect_public_key,
+)
 from .hashing import HashAlgorithm, hash_bytes
 from .hex_utils import hex_to_bytes
 from .models.analysis_result import REDACTED, AnalysisResult
 from .reports import render_csv, render_json, write_csv, write_json
 from .reports._io import atomic_write_text, resolve_target
 from .utils.formatting import (
+    abbreviate,
     format_bit_row,
     format_byte_row,
     format_frequency,
@@ -73,6 +84,8 @@ examples:
   binarycryptolab public-key --private-key 1 --format compressed
   binarycryptolab bitcoin-address --public-key 0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798 --type p2wpkh
   binarycryptolab decode-address bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 --network mainnet
+  binarycryptolab dissect-public-key --public-key 0279BE667E...F81798 --depth deep
+  binarycryptolab dissect-public-key --input-file keys.txt --format csv --output keys.csv
 
 security:
   Use synthetic test values only.  Command-line arguments can be recorded in
@@ -80,6 +93,15 @@ security:
   --prompt-private-key (hidden input) or the Python API for sensitive values.
   This tool never contacts the network and never stores private keys.
 """
+
+#: Maximum number of public keys accepted in one batch dissection.
+MAX_BATCH_KEYS: Final = 1000
+
+_FORENSICS_WARNINGS: Final = (
+    "The forecast is a statistical reading of a public key, not key recovery.",
+    "No blockchain data was queried; ownership, balance, and history are unknown.",
+    "Addresses for testnet, signet, and regtest are for testing only.",
+)
 
 _PRIVATE_KEY_WARNING: Final = (
     "SECURITY: a private key supplied as a command-line argument can be captured by "
@@ -217,14 +239,14 @@ def build_parser() -> argparse.ArgumentParser:
         "bitcoin-address",
         help="derive a Bitcoin address from a public key",
         description=(
-            "Derive a P2PKH or P2WPKH address from a secp256k1 public key. "
-            "No blockchain data is queried."
+            "Derive a P2PKH, P2WPKH, or P2SH-P2WPKH address from a secp256k1 "
+            "public key. No blockchain data is queried."
         ),
     )
     address.add_argument("--public-key", required=True, help="SEC 1 public key in hexadecimal")
     address.add_argument(
         "--type",
-        choices=("p2pkh", "p2wpkh"),
+        choices=("p2pkh", "p2wpkh", "p2sh-p2wpkh"),
         default="p2pkh",
         help="address type (default: p2pkh)",
     )
@@ -251,6 +273,45 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_report_options(decoder, flag="--report-format")
     decoder.set_defaults(handler=_cmd_decode_address)
+
+    dissect = subparsers.add_parser(
+        "dissect-public-key",
+        help="dissect a public key from every public angle and forecast its structure",
+        description=(
+            "Decompose a secp256k1 public key: coordinates, encodings, bit and byte "
+            "profiles, curve checks, digests, the full address matrix, structural "
+            "findings, and a scored forecast. No private key is computed, searched "
+            "for, or stored."
+        ),
+    )
+    source = dissect.add_mutually_exclusive_group(required=True)
+    source.add_argument("--public-key", help="SEC 1 public key in hexadecimal")
+    source.add_argument(
+        "--input-file",
+        metavar="PATH",
+        help=f"file with one public key per line (blank lines and # comments ignored, "
+        f"max {MAX_BATCH_KEYS} keys)",
+    )
+    dissect.add_argument(
+        "--depth",
+        choices=DEPTH_LEVELS,
+        default="standard",
+        help="standard report, or deep for extra encodings, limbs, and bit grids",
+    )
+    dissect.add_argument(
+        "--networks",
+        default=None,
+        metavar="LIST",
+        help="comma-separated networks for the address matrix "
+        "(default: mainnet,testnet,signet,regtest)",
+    )
+    dissect.add_argument(
+        "--art",
+        action="store_true",
+        help="include ASCII bit grids for x and y in the text report",
+    )
+    _add_report_options(dissect, flag="--report-format")
+    dissect.set_defaults(handler=_cmd_dissect_public_key)
 
     return parser
 
@@ -674,6 +735,501 @@ def _cmd_decode_address(args: argparse.Namespace) -> int:
         overwrite=args.overwrite,
         renderer=_render_decoded_address_text,
     )
+
+
+# ---------------------------------------------------------------------------
+# Public-key forensics
+# ---------------------------------------------------------------------------
+
+
+def _parse_networks(text: str | None) -> tuple[Network, ...]:
+    """Parse a comma-separated network list, preserving order and dropping duplicates."""
+    if text is None:
+        return tuple(ALL_NETWORKS)
+    names = [part.strip() for part in text.split(",") if part.strip()]
+    if not names:
+        raise InputValidationError("--networks needs at least one network name")
+    selected: list[Network] = []
+    for name in names:
+        network = Network.parse(name)
+        if network not in selected:
+            selected.append(network)
+    return tuple(selected)
+
+
+def _section(payload: dict[str, object], key: str) -> dict[str, object]:
+    """Return a nested mapping, or an empty mapping when absent or mistyped."""
+    value = payload.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _entries(payload: dict[str, object], key: str) -> list[dict[str, object]]:
+    """Return a nested list of mappings, or an empty list when absent."""
+    value = payload.get(key)
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _as_float(value: object, default: float = 0.0) -> float:
+    """Coerce a JSON value to ``float`` for display, falling back to a default."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_text_list(value: object) -> list[str]:
+    """Coerce a JSON value to a list of strings, dropping anything else."""
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
+
+
+def _probability_label(value: object) -> str:
+    """Format a probability for the text report."""
+    if not isinstance(value, (int, float)):
+        return "-"
+    number = float(value)
+    if number >= 0.01:
+        return f"{number:.3f}"
+    return f"{number:.2e}"
+
+
+def _render_forensics_text(result: AnalysisResult) -> str:
+    """Render a deep public-key dissection as aligned text sections."""
+    data = result.forensics or {}
+    public_key = _section(data, "public_key")
+    coordinates = _section(data, "coordinates")
+    forecast = _section(data, "forecast")
+    lines: list[str] = [_header("public key dissection"), ""]
+
+    identity = [
+        ("Curve", str(data.get("curve", ""))),
+        ("Input encoding", str(_section(data, "input").get("encoding", ""))),
+        ("Prefix byte", str(public_key.get("prefix_byte", ""))),
+        ("y parity", str(public_key.get("y_parity", ""))),
+        ("Compressed", str(public_key.get("compressed_hex", ""))),
+        ("Uncompressed", str(public_key.get("uncompressed_hex", ""))),
+        ("x-only (BIP-340)", str(public_key.get("x_only_hex", ""))),
+        ("Depth", str(data.get("depth", ""))),
+    ]
+    lines.append(format_table(("Field", "Value"), identity))
+
+    lines.append("")
+    lines.append("Coordinates")
+    coordinate_rows = []
+    for name in ("x", "y"):
+        profile = _section(coordinates, name)
+        coordinate_rows.append(
+            (
+                name,
+                abbreviate(str(profile.get("hexadecimal", "")), 30),
+                str(profile.get("bit_length", "")),
+                str(profile.get("leading_zero_bits", "")),
+                str(profile.get("trailing_zero_bits", "")),
+                str(profile.get("hamming_weight", "")),
+                _probability_label(profile.get("hamming_p_value")),
+                f"{_as_float(profile.get('byte_entropy')):.3f}",
+                "even" if profile.get("is_even") else "odd",
+            )
+        )
+    lines.append(
+        format_table(
+            (
+                "Coord",
+                "Hex",
+                "Bits",
+                "Lead 0s",
+                "Trail 0s",
+                "Weight",
+                "Binomial p",
+                "Entropy",
+                "Parity",
+            ),
+            coordinate_rows,
+        )
+    )
+
+    verification = _section(data, "verification")
+    lines.append("")
+    failed = [name for name, passed in verification.items() if not passed]
+    if failed:
+        lines.append("Curve verification: FAILED")
+        for name in failed:
+            lines.append(f"  - {name}")
+    else:
+        lines.append(f"Curve verification: all {len(verification)} checks passed")
+
+    findings = _entries(data, "findings")
+    lines.append("")
+    lines.append(f"Structural findings ({len(findings)})")
+    if findings:
+        lines.append(
+            format_table(
+                ("Severity", "Code", "Evidence", "p"),
+                [
+                    (
+                        str(finding.get("severity", "")),
+                        str(finding.get("code", "")),
+                        abbreviate(str(finding.get("evidence", "")), 58),
+                        _probability_label(finding.get("probability")),
+                    )
+                    for finding in findings
+                ],
+            )
+        )
+        for finding in findings:
+            lines.append(f"  - {finding.get('title', '')}: {finding.get('interpretation', '')}")
+    else:
+        lines.append("  none: the key looks like a uniformly random 256-bit point")
+
+    lines.append("")
+    lines.append("Forecast")
+    lines.append(f"  Verdict         : {forecast.get('verdict', '')}")
+    lines.append(f"  Size class      : {forecast.get('size_class', '')}")
+    score = _as_float(forecast.get("structure_score"))
+    surprisal = _as_float(forecast.get("total_surprisal_bits"))
+    lines.append(f"  Structure score : {score:.1f}/100")
+    lines.append(f"  Surprisal       : {surprisal:.1f} bits")
+    lines.append(f"  Recoverable     : {'yes' if forecast.get('recoverable') else 'no'}")
+    lines.append("")
+    lines.append("  Hypotheses")
+    hypotheses = _entries(forecast, "hypotheses")
+    if hypotheses:
+        lines.append(
+            format_table(
+                ("Likelihood", "Score", "Hypothesis"),
+                [
+                    (
+                        str(item.get("likelihood", "")),
+                        f"{_as_float(item.get('score')):.2f}",
+                        str(item.get("hypothesis", "")),
+                    )
+                    for item in hypotheses
+                ],
+            )
+        )
+    estimates = _entries(forecast, "search_estimates")
+    if estimates:
+        lines.append("")
+        lines.append("  Discrete-logarithm cost (not implemented; for scale only)")
+        lines.append(
+            format_table(
+                ("Strategy", "Scalar bits", "Operations", "Memory", "Time", "Today"),
+                [
+                    (
+                        str(item.get("strategy", "")),
+                        str(item.get("scalar_bits", "")),
+                        str(item.get("operations", "")),
+                        abbreviate(str(item.get("memory", "")), 40),
+                        str(item.get("estimated_time", "")),
+                        str(item.get("feasible_today", "")),
+                    )
+                    for item in estimates
+                ],
+            )
+        )
+
+    addresses = _entries(data, "address_matrix")
+    if addresses:
+        lines.append("")
+        lines.append(f"Address matrix ({len(addresses)})")
+        lines.append(
+            format_table(
+                ("Network", "Type", "Key", "Address", "scriptPubKey"),
+                [
+                    (
+                        str(entry.get("network", "")),
+                        str(entry.get("address_type", "")),
+                        str(entry.get("key_encoding", "")),
+                        str(entry.get("address", "")),
+                        abbreviate(str(entry.get("script_pubkey_hex", "")), 44),
+                    )
+                    for entry in addresses
+                ],
+            )
+        )
+
+    mirror = _section(data, "mirror_point")
+    if mirror:
+        lines.append("")
+        lines.append("Mirror point (-P, shares the same x)")
+        mirror_rows = [
+            ("x", str(mirror.get("x_hex", ""))),
+            ("y = p - y", str(mirror.get("y_hex", ""))),
+            ("Compressed", str(mirror.get("compressed_hex", ""))),
+            ("y parity", str(mirror.get("y_parity", ""))),
+        ]
+        lines.append(format_table(("Field", "Value"), mirror_rows))
+        mirror_addresses = _entries(mirror, "addresses")
+        if mirror_addresses:
+            lines.append("")
+            lines.append(
+                format_table(
+                    ("Mirror", "Address", "scriptPubKey"),
+                    [
+                        (
+                            str(entry.get("address_type", "")),
+                            str(entry.get("address", "")),
+                            abbreviate(str(entry.get("script_pubkey_hex", "")), 44),
+                        )
+                        for entry in mirror_addresses
+                    ],
+                )
+            )
+        if mirror.get("note"):
+            lines.append(f"  {mirror['note']}")
+
+    keyspace = _section(data, "keyspace")
+    if keyspace:
+        lines.append("")
+        lines.append("Keyspace")
+        lines.append(
+            format_table(
+                ("Property", "Value"),
+                [(str(key), abbreviate(str(value), 78)) for key, value in keyspace.items()],
+            )
+        )
+
+    digests = _section(data, "digests")
+    if digests:
+        lines.append("")
+        lines.append("Digests")
+        lines.append(
+            format_table(
+                ("Algorithm", "Digest"),
+                [(name, abbreviate(str(value), 72)) for name, value in digests.items()],
+            )
+        )
+
+    representations = _entries(data, "representations")
+    if representations:
+        lines.append("")
+        lines.append("Representations")
+        lines.append(
+            format_table(
+                ("Label", "Value"),
+                [
+                    (str(item.get("label", "")), abbreviate(str(item.get("value", "")), 72))
+                    for item in representations
+                ],
+            )
+        )
+
+    profiles = _entries(data, "bit_profiles")
+    if profiles:
+        lines.append("")
+        lines.append("Bit profiles")
+        lines.append(
+            format_table(
+                ("View", "Bits", "Ones", "One ratio", "Entropy", "Longest 1 run", "Longest 0 run"),
+                [
+                    (
+                        str(item.get("label", "")),
+                        str(item.get("length_bits", "")),
+                        str(item.get("ones", "")),
+                        f"{_as_float(item.get('one_ratio')):.4f}",
+                        f"{_as_float(item.get('entropy')):.4f}",
+                        str(item.get("one_run_longest", "")),
+                        str(item.get("zero_run_longest", "")),
+                    )
+                    for item in profiles
+                ],
+            )
+        )
+
+    if result.extra.get("art"):
+        lines.append("")
+        lines.append("Bit grid (x, most significant bit first)")
+        lines.extend(
+            f"  {row}" for row in _as_text_list(_section(coordinates, "x").get("bit_grid"))
+        )
+        lines.append("Bit grid (y, most significant bit first)")
+        lines.extend(
+            f"  {row}" for row in _as_text_list(_section(coordinates, "y").get("bit_grid"))
+        )
+
+    recommendations = forecast.get("recommendations")
+    if isinstance(recommendations, list) and recommendations:
+        lines.append("")
+        lines.append("Recommendations")
+        lines.extend(f"  - {item}" for item in recommendations)
+    limitations = forecast.get("limitations")
+    if isinstance(limitations, list) and limitations:
+        lines.append("")
+        lines.append("Limitations")
+        lines.extend(f"  - {item}" for item in limitations)
+
+    _append_warnings(lines, result.warnings)
+    return "\n".join(lines) + "\n"
+
+
+def _dissection_result(
+    public_key: str,
+    *,
+    networks: tuple[Network, ...],
+    depth: str,
+    art: bool,
+) -> AnalysisResult:
+    """Dissect one key and wrap it in a report-ready result."""
+    dissection = dissect_public_key(public_key, networks=networks, depth=depth)
+    payload = dissection.as_dict()
+    return AnalysisResult(
+        input_type="public_key",
+        original_input=public_key.strip(),
+        normalized_input=dissection.input_hex,
+        public_key=payload["public_key"],
+        forensics=payload,
+        warnings=_FORENSICS_WARNINGS,
+        extra={"depth": depth, "networks": [network.value for network in networks], "art": art},
+    )
+
+
+def _read_public_keys(path_text: str) -> tuple[str, ...]:
+    """Read one public key per line, ignoring blanks and ``#`` comments."""
+    path = Path(path_text).expanduser()
+    if not path.exists():
+        raise InputValidationError(f"input file does not exist: {path}")
+    if path.is_dir():
+        raise InputValidationError(f"input path is a directory: {path}")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise InputValidationError(f"input file is not valid UTF-8 text: {path}") from exc
+    except OSError as exc:
+        raise InputValidationError(
+            f"could not read input file {path}: {exc.strerror or exc}"
+        ) from exc
+    keys: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        keys.append(stripped)
+        if len(keys) > MAX_BATCH_KEYS:
+            raise InputValidationError(
+                f"input file contains more than {MAX_BATCH_KEYS} keys; split it into smaller batches"
+            )
+    if not keys:
+        raise InputValidationError(f"input file contains no public keys: {path}")
+    return tuple(keys)
+
+
+def _render_batch_text(keys: tuple[str, ...], dissections: tuple[PublicKeyDissection, ...]) -> str:
+    """Render a one-line-per-key batch summary."""
+    rows: list[tuple[str, str, str, str, str]] = []
+    for index, dissection in enumerate(dissections, start=1):
+        payload = dissection.as_dict()
+        forecast = _section(payload, "forecast")
+        mainnet = [
+            entry
+            for entry in _entries(payload, "address_matrix")
+            if entry.get("network") == Network.MAINNET.value
+        ]
+        p2pkh = next((entry for entry in mainnet if entry.get("address_type") == "p2pkh"), {})
+        p2wpkh = next((entry for entry in mainnet if entry.get("address_type") == "p2wpkh"), {})
+        rows.append(
+            (
+                str(index),
+                str(p2pkh.get("address", "")),
+                str(p2wpkh.get("address", "")),
+                f"{_as_float(forecast.get('structure_score')):.1f}",
+                str(forecast.get("verdict", "")).split(":")[0],
+            )
+        )
+    lines = [
+        _header("public key dissection (batch)"),
+        "",
+        format_table(
+            ("#", "Mainnet P2PKH", "Mainnet P2WPKH", "Score", "Verdict"),
+            rows,
+        ),
+        "",
+        f"{len(keys)} key(s) analysed. This tool never computes private keys.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _render_batch_csv(dissections: tuple[PublicKeyDissection, ...]) -> str:
+    """Render a batch dissection as long-format CSV with a key index column."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(("key_index", "section", "key", "value"))
+    for index, dissection in enumerate(dissections, start=1):
+        payload = dissection.as_dict()
+        rendered = AnalysisResult(
+            input_type="public_key",
+            original_input=str(_section(payload, "input").get("hex", "")),
+            normalized_input=str(_section(payload, "input").get("hex", "")),
+            forensics=payload,
+        )
+        reader = csv.reader(io.StringIO(render_csv(rendered)))
+        next(reader, None)  # header
+        writer.writerows((str(index), row[0], row[1], row[2]) for row in reader)
+    return buffer.getvalue()
+
+
+def _emit_batch(payload: str, *, output: str | None, overwrite: bool) -> int:
+    """Write batch output to a file or stdout."""
+    if output:
+        target = resolve_target(output, overwrite=overwrite, create_parents=True)
+        atomic_write_text(target, payload, overwrite=overwrite)
+        print(f"Report written to {target}")
+    else:
+        sys.stdout.write(payload)
+    return EXIT_SUCCESS
+
+
+def _cmd_dissect_public_key(args: argparse.Namespace) -> int:
+    networks = _parse_networks(args.networks)
+    if args.public_key is not None:
+        result = _dissection_result(
+            args.public_key, networks=networks, depth=args.depth, art=args.art
+        )
+        _LOGGER.info("public key dissection completed")
+        return _emit(
+            result,
+            report_format=args.report_format,
+            output=args.output,
+            overwrite=args.overwrite,
+            renderer=_render_forensics_text,
+        )
+
+    keys = _read_public_keys(args.input_file)
+    dissections = dissect_many(keys, networks=networks, depth=args.depth)
+    _LOGGER.info("batch public key dissection completed for %d key(s)", len(dissections))
+    if args.report_format == "json":
+        payload = json.dumps(
+            [
+                {"index": index, **dissection.as_dict()}
+                for index, dissection in enumerate(dissections, start=1)
+            ],
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        return _emit_batch(payload + "\n", output=args.output, overwrite=args.overwrite)
+    if args.report_format == "csv":
+        return _emit_batch(
+            _render_batch_csv(dissections), output=args.output, overwrite=args.overwrite
+        )
+    text = _render_batch_text(keys, dissections)
+    if args.art:
+        for dissection in dissections:
+            text += "\n" + _render_forensics_text(
+                AnalysisResult(
+                    input_type="public_key",
+                    original_input=dissection.input_hex,
+                    normalized_input=dissection.input_hex,
+                    forensics=dissection.as_dict(),
+                    warnings=_FORENSICS_WARNINGS,
+                    extra={"art": True},
+                )
+            )
+    return _emit_batch(text, output=args.output, overwrite=args.overwrite)
 
 
 # ---------------------------------------------------------------------------

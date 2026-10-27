@@ -74,6 +74,20 @@ def _analysis_rows(analysis: dict[str, Any], rows: list[tuple[str, str, str]]) -
             _flatten(key, value, rows)
 
 
+def _forensics_rows(payload: dict[str, Any], rows: list[tuple[str, str, str]]) -> None:
+    """Flatten the public-key forensics section into readable rows.
+
+    Table-like sections (address matrix, findings, hypotheses, search estimates)
+    are expanded one row per entry so a spreadsheet shows real tables instead of
+    one enormous cell.
+    """
+    for key, value in payload.items():
+        if isinstance(value, (dict, list, tuple)):
+            _flatten(f"forensics.{key}", value, rows)
+        else:
+            rows.append(("forensics", str(key), _stringify(value)))
+
+
 def _rows_for(result: AnalysisResult) -> list[tuple[str, str, str]]:
     rows: list[tuple[str, str, str]] = []
     payload = result.to_dict()
@@ -101,6 +115,9 @@ def _rows_for(result: AnalysisResult) -> list[tuple[str, str, str]]:
                 _flatten(f"bitcoin_address.{key}", value, rows)
             else:
                 rows.append(("bitcoin_address", key, _stringify(value)))
+
+    if result.forensics is not None:
+        _forensics_rows(result.forensics, rows)
 
     for index, warning in enumerate(result.warnings):
         rows.append(("warnings", f"warning[{index}]", warning))

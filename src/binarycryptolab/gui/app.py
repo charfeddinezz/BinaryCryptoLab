@@ -11,8 +11,9 @@ telemetry, and writes nothing to disk unless the user explicitly downloads a
 report.  Private scalars are entered in a password field and are never placed
 in the downloadable result: the result carries the ``<redacted>`` marker.
 
-Only non-sensitive results are kept in ``st.session_state`` so that download
-buttons survive Streamlit's re-run model.
+The interface has five tabs: analysis, hashing, public-key derivation, key
+forensics, and address derivation.  Only non-sensitive results are kept in
+``st.session_state`` so that download buttons survive Streamlit's re-run model.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from binarycryptolab.gui.service import (
     address_result,
     analyse,
     download_payloads,
+    forensic_result,
     hash_result,
     public_key_result,
 )
@@ -225,6 +227,237 @@ def _address_tab() -> None:
         _downloads("address", "Address report")
 
 
+def _forensics_tab() -> None:
+    st.subheader("Public-key dissection and structural forecast")
+    st.caption(
+        "Every representation, bit/byte profile, curve check, digest, and address for a "
+        "public key, plus a scored structural assessment. No private key is computed, "
+        "searched for, or stored."
+    )
+    public_key = st.text_area(
+        "Public key to dissect (hexadecimal)",
+        value="0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        height=90,
+        key="forensics-public-key",
+    )
+    left, middle, right = st.columns(3)
+    networks = left.multiselect(
+        "Networks",
+        options=("mainnet", "testnet", "signet", "regtest"),
+        default=["mainnet", "testnet", "signet", "regtest"],
+        key="forensics-networks",
+    )
+    depth = middle.selectbox("Depth", options=("standard", "deep"), key="forensics-depth")
+    show_art = right.checkbox("Show bit grids", value=False, key="forensics-art")
+    if st.button("Dissect key", type="primary", key="forensics-run"):
+        try:
+            st.session_state["forensics"] = forensic_result(
+                public_key, networks=tuple(networks), depth=depth
+            )
+        except BinaryCryptoLabError as exc:
+            st.error(f"{type(exc).__name__}: {exc}")
+        except ValueError as exc:
+            st.error(str(exc))
+
+    result = st.session_state.get("forensics")
+    if result is None or result.forensics is None:
+        return
+    payload = result.forensics
+    forecast = payload["forecast"]
+    first, second, third, fourth = st.columns(4)
+    first.metric("Structure score", f"{forecast['structure_score']:.1f}/100")
+    second.metric("Surprisal", f"{forecast['total_surprisal_bits']:.1f} bits")
+    third.metric("Findings", str(len(payload["findings"])))
+    fourth.metric("Recoverable", "no")
+
+    verdict = str(forecast["verdict"])
+    if forecast["structure_score"] >= 25:
+        st.error(verdict)
+    else:
+        st.success(verdict)
+    st.caption(str(forecast["size_class"]))
+    st.caption(str(forecast["summary"]))
+
+    findings = payload["findings"]
+    st.markdown("**Structural findings**")
+    if findings:
+        st.dataframe(
+            [
+                {
+                    "severity": finding["severity"],
+                    "code": finding["code"],
+                    "evidence": finding["evidence"],
+                    "probability": f"{finding['probability']:.2e}",
+                    "surprisal_bits": round(finding["surprisal_bits"], 2),
+                }
+                for finding in findings
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+        for finding in findings:
+            with st.expander(f"{finding['title']} ({finding['severity']})"):
+                st.write(finding["interpretation"])
+    else:
+        st.info("No structural anomaly detected. This does not prove the key is secure.")
+
+    st.markdown("**Hypotheses**")
+    st.dataframe(
+        [
+            {
+                "hypothesis": item["hypothesis"],
+                "likelihood": item["likelihood"],
+                "score": item["score"],
+                "evidence": item["evidence"],
+            }
+            for item in forecast["hypotheses"]
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    st.markdown("**Coordinates**")
+    st.dataframe(
+        [
+            {
+                "coordinate": name,
+                "hex": profile["hexadecimal"],
+                "bits": profile["bit_length"],
+                "leading_zero_bits": profile["leading_zero_bits"],
+                "trailing_zero_bits": profile["trailing_zero_bits"],
+                "hamming_weight": profile["hamming_weight"],
+                "hamming_p_value": f"{profile['hamming_p_value']:.2e}",
+                "byte_entropy": round(profile["byte_entropy"], 4),
+                "parity": "even" if profile["is_even"] else "odd",
+            }
+            for name, profile in payload["coordinates"].items()
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    st.markdown("**Address matrix**")
+    st.dataframe(
+        [
+            {
+                "network": entry["network"],
+                "type": entry["address_type"],
+                "key": entry["key_encoding"],
+                "address": entry["address"],
+                "scriptPubKey": entry["script_pubkey_hex"],
+                "roundtrip": entry["roundtrip_ok"],
+            }
+            for entry in payload["address_matrix"]
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    mirror = payload["mirror_point"]
+    with st.expander("Mirror point (-P, shares the same x)"):
+        st.caption(mirror["note"])
+        st.dataframe(
+            [
+                {
+                    "field": "x",
+                    "value": mirror["x_hex"],
+                },
+                {"field": "y = p - y", "value": mirror["y_hex"]},
+                {"field": "compressed", "value": mirror["compressed_hex"]},
+                {"field": "y parity", "value": mirror["y_parity"]},
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+        st.dataframe(
+            [
+                {
+                    "type": entry["address_type"],
+                    "address": entry["address"],
+                    "scriptPubKey": entry["script_pubkey_hex"],
+                }
+                for entry in mirror["addresses"]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+    with st.expander("Keyspace"):
+        st.dataframe(
+            [{"property": key, "value": value} for key, value in payload["keyspace"].items()],
+            width="stretch",
+            hide_index=True,
+        )
+
+    with st.expander("Discrete-logarithm cost (not implemented; for scale only)"):
+        st.dataframe(
+            [
+                {
+                    "strategy": row["strategy"],
+                    "scalar_bits": row["scalar_bits"],
+                    "operations": row["operations"],
+                    "memory": row["memory"],
+                    "time": row["estimated_time"],
+                    "today": row["feasible_today"],
+                }
+                for row in forecast["search_estimates"]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+    with st.expander("Bit and byte profiles"):
+        st.dataframe(
+            [
+                {
+                    "view": row["label"],
+                    "bits": row["length_bits"],
+                    "ones": row["ones"],
+                    "one_ratio": round(row["one_ratio"], 4),
+                    "entropy": round(row["entropy"], 4),
+                    "longest_one_run": row["one_run_longest"],
+                    "longest_zero_run": row["zero_run_longest"],
+                }
+                for row in payload["bit_profiles"]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+    with st.expander("Digests and representations"):
+        st.dataframe(
+            [{"algorithm": name, "digest": value} for name, value in payload["digests"].items()],
+            width="stretch",
+            hide_index=True,
+        )
+        st.dataframe(
+            [
+                {
+                    "label": row["label"],
+                    "encoding": row["encoding"],
+                    "value": row["value"],
+                    "bytes": row["byte_length"],
+                }
+                for row in payload["representations"]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+    if show_art:
+        with st.expander("Bit grids", expanded=True):
+            for name, profile in payload["coordinates"].items():
+                st.caption(f"{name}: most significant bit first")
+                st.code("\n".join(profile["bit_grid"]), language="text")
+
+    with st.expander("Curve verification"):
+        st.write(dict(payload["verification"]))
+
+    for warning in result.warnings:
+        st.warning(warning)
+    _downloads("forensics", "Dissection report")
+
+
 def run_app() -> None:
     """Render the full Streamlit application."""
     st.set_page_config(page_title=f"{APP_NAME} {__version__}", page_icon="🔐", layout="wide")
@@ -239,8 +472,8 @@ def run_app() -> None:
             "you download a report."
         )
 
-    analysis_tab, hash_tab, public_key_tab, address_tab = st.tabs(
-        ["Analysis", "Hashing", "Public key", "Bitcoin address"]
+    analysis_tab, hash_tab, public_key_tab, forensics_tab, address_tab = st.tabs(
+        ["Analysis", "Hashing", "Public key", "Key forensics", "Bitcoin address"]
     )
     with analysis_tab:
         _analysis_tab()
@@ -248,6 +481,8 @@ def run_app() -> None:
         _hash_tab()
     with public_key_tab:
         _public_key_tab()
+    with forensics_tab:
+        _forensics_tab()
     with address_tab:
         _address_tab()
 
