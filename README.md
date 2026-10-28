@@ -572,9 +572,11 @@ BinaryCryptoLab/
 ├── examples/
 │   ├── binary_analysis.py  hex_analysis.py
 │   ├── public_key_analysis.py  public_key_forensics.py
+│   ├── key_assembly.py
 ├── docs/
 │   ├── architecture.md  usage.md  cryptography.md
 │   ├── bitcoin_addresses.md  public_key_forensics.md  security.md
+│   ├── key_assembly.md
 └── .github/workflows/tests.yml
 ```
 
@@ -601,12 +603,16 @@ BinaryCryptoLab/
   derivation, networks, scriptPubKeys, vectors, and limitations.
 - [Public-key forensics](docs/public_key_forensics.md) — every measured angle, the
   probability model, the evidence-family score, and the hard limits.
+- [Key assembly](docs/key_assembly.md) — hex segmentation, the single information
+  scale, bounded assembly, related-key detection, and what cannot be done.
 - [Security](docs/security.md) — threat model, non-goals, and safe-use
   checklist.
 - [Usage](docs/usage.md) — complete CLI reference and Python API examples.
 
 ## Known limitations
 
+- A scalar can only be assembled from knowledge you supply; a public key alone
+  yields nothing (discrete logarithm), and windows above 40 bits are refused.
 - Only P2PKH, P2WPKH, and P2SH-P2WPKH addresses are **derived**. Generic P2SH,
   P2WSH, and Taproot-style outputs can be decoded and validated but not created.
 - No WIF encoding, BIP-32/39 derivation, signing, PSBT, or keystore support.
