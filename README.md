@@ -605,6 +605,8 @@ BinaryCryptoLab/
   probability model, the evidence-family score, and the hard limits.
 - [Key assembly](docs/key_assembly.md) — hex segmentation, the single information
   scale, bounded assembly, related-key detection, and what cannot be done.
+- [How it works (Arabic)](docs/how_it_works_ar.md) — تشغيل خطوة بخطوة لكل أمر،
+  بالمعادلات والأرقام المقاسة.
 - [Security](docs/security.md) — threat model, non-goals, and safe-use
   checklist.
 - [Usage](docs/usage.md) — complete CLI reference and Python API examples.

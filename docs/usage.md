@@ -508,7 +508,8 @@ Search
 
 A public key alone cannot produce its scalar: see
 [`key_assembly.md`](key_assembly.md) for the ledger, the formulas, the cost table,
-and the limits.
+and the limits. A step-by-step Arabic walkthrough of every command is in
+[`how_it_works_ar.md`](how_it_works_ar.md).
 
 ## compare-keys
 
