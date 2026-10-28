@@ -40,17 +40,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Final
 
-from .base58 import b58decode
-from .bech32 import Bech32Spec, bech32_decode
+from .address_formats import DecodedInput, decode_address_input
+from .address_safety import SafetyAudit, TaprootInfo, audit_decoded_input
 from .bitcoin import (
     Network,
-    decode_address,
     derive_p2pkh_address,
     derive_p2sh_p2wpkh_address,
+    derive_p2tr_address,
     derive_p2wpkh_address,
     hash160_public_key,
 )
-from .hashing import double_sha256
 from .randomness import RandomnessReport, bits_from_bytes, randomness_report
 from .special_functions import binomial_two_sided_p
 from .statistics import byte_statistics
@@ -225,33 +224,48 @@ class VanityReport:
         }
 
 
-def vanity_report(address: str, *, claimed_prefix: str | None = None) -> VanityReport:
+def vanity_report(
+    address: str,
+    *,
+    claimed_prefix: str | None = None,
+    version: int | None = None,
+    payload_length: int = 20,
+) -> VanityReport:
     """Evaluate the prefix of *address* for evidence of vanity generation.
 
-    A six-character prefix has probability around ``58^-6``, yet every address has
-    one: being impressed by the prefix that happens to appear is the look-elsewhere
-    fallacy. Only a prefix **declared in advance** supports a significance claim,
-    which is why ``claimed_prefix`` is required for a non-trivial verdict.
+    A six-character prefix looks improbable, yet every address has one: being
+    impressed by the prefix that happens to appear is the look-elsewhere fallacy.
+    Only a prefix **declared in advance** supports a significance claim, which is
+    why ``claimed_prefix`` is required for a non-trivial verdict.
 
     Args:
         address: A Base58Check address.
         claimed_prefix: The prefix the caller expected before seeing the address.
+        version: Version prefix to assume.  ``None`` uses the decoded value.
+        payload_length: Payload size used by the counting model.
 
     Returns:
         The vanity analysis.
 
     Raises:
-        AddressEncodingError: The address is not a valid Base58Check address.
-        ValueError: The claimed prefix contains a non-Base58 character.
+        ValueError: The address is not Base58Check, or the claimed prefix is not
+            Base58.
     """
-    decoded = decode_address(address)
-    if decoded.address_type not in {"p2pkh", "p2sh"}:
+    decoded = decode_address_input(address)
+    if decoded.encoding != "base58check":
         raise ValueError("vanity analysis is defined for Base58Check addresses only")
-    version = 0 if decoded.address_type == "p2pkh" else 5
-    normalized = decoded.address.strip()
+    if len(decoded.payload) != 20:
+        raise ValueError("vanity analysis is defined for 20-byte payloads only")
+    if version is None:
+        version = decoded.version_byte if decoded.version_byte is not None else 0
+    if decoded.version_byte is not None and version != decoded.version_byte:
+        raise ValueError("the supplied version does not match the address")
+    normalized = decoded.address or address.strip()
+    length = len(decoded.payload)
+
     if claimed_prefix is None:
         prefix = normalized[:6]
-        probability = base58_prefix_probability(prefix, version=version)
+        probability = base58_prefix_probability(prefix, version=version, payload_length=length)
         naive = 58.0 ** (-max(0, len(prefix) - 1))
         return VanityReport(
             prefix=prefix,
@@ -266,7 +280,7 @@ def vanity_report(address: str, *, claimed_prefix: str | None = None) -> VanityR
             ),
         )
     prefix = claimed_prefix.strip()
-    probability = base58_prefix_probability(prefix, version=version)
+    probability = base58_prefix_probability(prefix, version=version, payload_length=length)
     naive = 58.0 ** (-max(0, len(prefix) - 1))
     matches = normalized.startswith(prefix)
     corrected = min(1.0, probability)
@@ -550,13 +564,14 @@ class HardnessReport:
 
     Attributes:
         steps: One :class:`RecoveryStep` per arrow, starting from the address.
-        total_cost_log2: Cost of the whole chain, in base-2 operations.
+        total_cost_log2: Cost of the whole chain in base-2 operations, or ``None``
+            when the type admits no bound at all.
         verdict: Plain-language conclusion.
         caveats: Modelling notes that a careful reader needs.
     """
 
     steps: tuple[RecoveryStep, ...]
-    total_cost_log2: float
+    total_cost_log2: float | None
     verdict: str
     caveats: tuple[str, ...]
 
@@ -570,60 +585,290 @@ class HardnessReport:
         }
 
 
-def _hardness() -> HardnessReport:
-    """Return the backward-chain cost report (constants only, no input needed)."""
-    steps = (
-        RecoveryStep(
-            step="address -> version/payload/checksum",
-            feasible=True,
-            cost_log2=0.0,
-            method="Base58Check or Bech32 decoding",
-            note="Reversible by definition: the encoding is public and lossless.",
-        ),
-        RecoveryStep(
-            step="payload -> public key",
-            feasible=False,
-            cost_log2=float(_HASH160_BITS),
-            method="preimage of RIPEMD160(SHA256(.)) over 256-bit inputs",
-            note=(
-                "The best known generic preimage attack costs about 2^160. Collision "
-                "attacks on RIPEMD-160 reach about 2^63, but a collision is useless "
-                "here: the task is a preimage of a specific digest."
-            ),
-        ),
-        RecoveryStep(
-            step="public key -> private scalar",
-            feasible=False,
-            cost_log2=float(_DL_BITS),
-            method="Pollard rho on the secp256k1 group",
-            note=(
-                "About 2^128 group operations with constant memory. No index calculus "
-                "or special algorithm is known for prime-order curves."
-            ),
+_BASE_CAVEATS: Final = (
+    "Costs are operation counts for the best publicly known classical algorithms, "
+    "not wall-clock promises: hardware assumptions change the constant, never the "
+    "exponent.",
+    "Grover's algorithm lowers a 2^160 preimage search to about 2^80 quantum "
+    "operations, which is still infeasible and requires a fault-tolerant machine "
+    "that does not exist.",
+    "Shor's algorithm would solve the discrete logarithm in polynomial time on a "
+    "large fault-tolerant quantum computer. No such machine exists at the required "
+    "scale, and published resource estimates remain contested. If one were built, "
+    "secp256k1 would fail outright rather than degrade.",
+    "RIPEMD-160 collision resistance is weaker than its preimage resistance; this "
+    "asymmetry is why the hash step is quoted at 2^160 and not at the collision "
+    "bound.",
+)
+
+_DECODE_STEP: Final = RecoveryStep(
+    step="input -> version/payload/checksum",
+    feasible=True,
+    cost_log2=0.0,
+    method="Base58Check, Bech32, Bech32m, or CashAddr decoding",
+    note="Reversible by definition: the encoding is public and lossless.",
+)
+
+
+def _hash_step(bits: int, *, algorithm: str, kind: str) -> RecoveryStep:
+    """Return the preimage step for a hash-committed output."""
+    return RecoveryStep(
+        step=f"payload -> {kind}",
+        feasible=False,
+        cost_log2=float(bits),
+        method=f"preimage of {algorithm}",
+        note=(
+            "A preimage of the specific digest is required. Collision attacks are "
+            "cheaper but useless here: a colliding value does not unlock this output."
         ),
     )
-    return HardnessReport(
-        steps=steps,
-        total_cost_log2=float(_DL_BITS + _HASH160_BITS),
-        verdict=(
-            "The chain cannot be run backwards. Both backward steps are infeasible, and "
-            "they must both be solved: the cheaper one alone is already about 2^128 "
-            "operations."
+
+
+def _dl_step(*, exposed: bool = False) -> RecoveryStep:
+    """Return the discrete-logarithm step."""
+    return RecoveryStep(
+        step="public key -> private scalar",
+        feasible=False,
+        cost_log2=float(_DL_BITS),
+        method="Pollard rho on the secp256k1 group",
+        note=(
+            "About 2^128 group operations with constant memory. No index calculus "
+            "or special algorithm is known for prime-order curves."
+            if not exposed
+            else "The key is already published, so no hash step stands in front of "
+            "this cost; it starts immediately."
         ),
-        caveats=(
-            "Costs are operation counts for the best publicly known classical "
-            "algorithms, not wall-clock promises: hardware assumptions change the "
-            "constant, never the exponent.",
-            "Grover's algorithm lowers a 2^160 preimage search to about 2^80 quantum "
-            "operations, which is still infeasible and requires a fault-tolerant "
-            "machine that does not exist.",
-            "Shor's algorithm would solve the discrete logarithm in polynomial time on "
-            "a large fault-tolerant quantum computer. No such machine exists at the "
-            "required scale, and published resource estimates remain contested. If one "
-            "were built, secp256k1 would fail outright rather than degrade.",
-            "RIPEMD-160 collision resistance is weaker than its preimage resistance; "
-            "this asymmetry is why the second step is quoted at 2^160 and not at the "
-            "collision bound.",
+    )
+
+
+def _hardness(address_type: str, payload_length: int) -> HardnessReport:
+    """Return the backward-chain cost report for one output type.
+
+    Args:
+        address_type: Output type, e.g. ``p2pkh`` or ``p2tr``.
+        payload_length: Payload size in bytes.
+
+    Returns:
+        The cost chain, its total, and the caveats that apply to this type.
+
+    Raises:
+        ValueError: The address type is not recognised.
+    """
+    caveats = _BASE_CAVEATS
+    if address_type in {"p2pkh", "p2wpkh"}:
+        steps = (
+            _DECODE_STEP,
+            _hash_step(
+                _HASH160_BITS,
+                algorithm="RIPEMD160(SHA256(.)) over 256-bit inputs",
+                kind="public key",
+            ),
+            _dl_step(),
+        )
+        return HardnessReport(
+            steps=steps,
+            total_cost_log2=float(_DL_BITS + _HASH160_BITS),
+            verdict=(
+                "The chain cannot be run backwards. Both backward steps are infeasible, "
+                "and they must both be solved: the cheaper one alone is already about "
+                "2^128 operations."
+            ),
+            caveats=caveats,
+        )
+    if address_type in {"p2sh", "p2wsh"}:
+        bits = _HASH160_BITS if address_type == "p2sh" else 256
+        algorithm = "HASH160" if address_type == "p2sh" else "SHA256"
+        steps = (
+            _DECODE_STEP,
+            _hash_step(bits, algorithm=f"{algorithm} over the redeem script", kind="script"),
+            _dl_step(),
+        )
+        return HardnessReport(
+            steps=steps,
+            total_cost_log2=float(bits),
+            verdict=(
+                "The hash layer is infeasible to invert, but the practical barrier is "
+                "smaller than it looks: redeem scripts come from a tiny family "
+                "(multisig, HTLC, timelock), and guessing the family is far cheaper "
+                "than 2^160. A script hash hides which script, not whether it is a "
+                "common one."
+            ),
+            caveats=(
+                *caveats,
+                "Multisig and time-locked scripts are enumerable: an attacker "
+                "guesses the template and hashes candidates, so script privacy is "
+                "not 160-bit privacy.",
+            ),
+        )
+    if address_type == "p2tr":
+        steps = (
+            _DECODE_STEP,
+            RecoveryStep(
+                step="payload -> public key",
+                feasible=True,
+                cost_log2=0.0,
+                method="x-only key lift (BIP-340)",
+                note=(
+                    "The address is the output key itself, so the public key is "
+                    "already known: one square root modulo the field prime."
+                ),
+            ),
+            _dl_step(exposed=True),
+        )
+        return HardnessReport(
+            steps=steps,
+            total_cost_log2=float(_DL_BITS),
+            verdict=(
+                "There is no hash layer at all. A Taproot address publishes a 256-bit "
+                "curve point, so the only barrier is the discrete logarithm, about "
+                "2^128 classical operations."
+            ),
+            caveats=(
+                *caveats,
+                "Because the output key is public and untweaked by any hash, Taproot "
+                "outputs are the first that a large fault-tolerant quantum computer "
+                "would break, and key-path spends add no further protection.",
+            ),
+        )
+    if address_type.startswith("witness_v"):
+        try:
+            version = int(address_type.removeprefix("witness_v"))
+        except ValueError:
+            version = -1
+        return HardnessReport(
+            steps=(
+                _DECODE_STEP,
+                RecoveryStep(
+                    step="unknown witness version -> spending",
+                    feasible=True,
+                    cost_log2=0.0,
+                    method="BIP-141 forward compatibility (unencumbered output)",
+                    note=(
+                        "Consensus defines no script for versions above the current "
+                        "one, so the output is spendable by anyone who can pay the fee."
+                    ),
+                ),
+            ),
+            total_cost_log2=0.0,
+            verdict=(
+                f"Witness version {version} has no spending rules yet. No key is "
+                "needed: the coins are claimable by any miner, so this is not "
+                "'hard to break', it is already open."
+            ),
+            caveats=caveats,
+        )
+    if address_type == "p2pk":
+        return HardnessReport(
+            steps=(
+                _DECODE_STEP,
+                RecoveryStep(
+                    step="script -> public key",
+                    feasible=True,
+                    cost_log2=0.0,
+                    method="the key is written into the output",
+                    note="Pay-to-public-key publishes the key on chain.",
+                ),
+                _dl_step(exposed=True),
+            ),
+            total_cost_log2=float(_DL_BITS),
+            verdict=(
+                "The public key is public, so only the discrete logarithm stands "
+                "between an observer and the coins: about 2^128 classical operations."
+            ),
+            caveats=caveats,
+        )
+    if address_type == "op_return":
+        return HardnessReport(
+            steps=(_DECODE_STEP,),
+            total_cost_log2=0.0,
+            verdict=(
+                "OP_RETURN outputs are provably unspendable by consensus. There is no "
+                "chain to run backwards because there is no way forward."
+            ),
+            caveats=caveats,
+        )
+    return HardnessReport(
+        steps=(_DECODE_STEP,),
+        total_cost_log2=None,
+        verdict=(
+            "The locking script does not match a recognised template, so no cost "
+            "bound can be stated: spendability depends entirely on the custom script."
+        ),
+        caveats=caveats,
+    )
+
+
+def _scale(address_type: str, payload_length: int) -> AddressKnowledgeScale:
+    """Return the single-scale knowledge report for one output type."""
+    bits = payload_length * 8
+    if address_type in {"p2pkh", "p2wpkh"}:
+        return AddressKnowledgeScale(
+            address_bits=bits,
+            public_key_candidates_log2=float(_SCALAR_BITS - bits),
+            scalar_bits_known=0.0,
+            scalar_bits_total=_SCALAR_BITS,
+            note=(
+                f"The address fixes a {bits}-bit digest, which leaves about "
+                f"2^{_SCALAR_BITS - bits} public keys consistent with it (2^256 "
+                "points, 2^160 digests). It fixes zero bits of the private scalar."
+            ),
+        )
+    if address_type == "p2sh":
+        return AddressKnowledgeScale(
+            address_bits=bits,
+            public_key_candidates_log2=float(_SCALAR_BITS - bits),
+            scalar_bits_known=0.0,
+            scalar_bits_total=_SCALAR_BITS,
+            note=(
+                "The address fixes a 160-bit script hash. Roughly 2^96 scripts share "
+                "it, and it fixes zero bits of any private scalar; the script, not a "
+                "key, is the missing object."
+            ),
+        )
+    if address_type == "p2wsh":
+        return AddressKnowledgeScale(
+            address_bits=bits,
+            public_key_candidates_log2=0.0,
+            scalar_bits_known=0.0,
+            scalar_bits_total=_SCALAR_BITS,
+            note=(
+                "The address fixes a 256-bit SHA256 script hash, so exactly one 32-byte "
+                "preimage (modulo collisions) matches it. It fixes zero bits of any "
+                "private scalar: the script is the missing object, and scripts are "
+                "usually guessable."
+            ),
+        )
+    if address_type == "p2tr":
+        return AddressKnowledgeScale(
+            address_bits=bits,
+            public_key_candidates_log2=0.0,
+            scalar_bits_known=0.0,
+            scalar_bits_total=_SCALAR_BITS,
+            note=(
+                "The address *is* a public key: a 256-bit x-coordinate that determines "
+                "the point up to its y parity. It fixes zero bits of the private "
+                "scalar, but there is no hash barrier left, only the discrete logarithm."
+            ),
+        )
+    if address_type == "p2pk":
+        return AddressKnowledgeScale(
+            address_bits=bits,
+            public_key_candidates_log2=0.0,
+            scalar_bits_known=0.0,
+            scalar_bits_total=_SCALAR_BITS,
+            note=(
+                "The output publishes the public key itself, so it fixes all 264 bits "
+                "of the point and zero bits of the private scalar."
+            ),
+        )
+    return AddressKnowledgeScale(
+        address_bits=bits,
+        public_key_candidates_log2=0.0,
+        scalar_bits_known=0.0,
+        scalar_bits_total=_SCALAR_BITS,
+        note=(
+            "This output does not commit to a key at all, so the notion of candidate "
+            "keys does not apply. No bits of any private scalar are fixed."
         ),
     )
 
@@ -638,29 +883,38 @@ class AddressDissection:
     """Everything that can be established about an address without a network.
 
     Attributes:
-        address: The canonical address string.
-        encoding: ``base58check``, ``bech32``, or ``bech32m``.
-        address_type: ``p2pkh``, ``p2sh``, ``p2wpkh``, ``p2wsh``, or ``witness_vN``.
+        address: Canonical address string, or the script hex for script inputs.
+        encoding: ``base58check``, ``bech32``, ``bech32m``, ``cashaddr``, or
+            ``script``.
+        address_type: ``p2pkh``, ``p2sh``, ``p2wpkh``, ``p2wsh``, ``p2tr``,
+            ``witness_vN``, ``p2pk``, ``op_return``, or ``nonstandard``.
+        chain: Best-known chain name.
+        chain_candidates: Every chain consistent with the format.
+        chain_ambiguous: Whether more than one chain is consistent.
+        input_kind: ``address``, ``bip21_uri``, or ``script_pubkey``.
+        uri_params: BIP-21 query parameters, as ordered pairs.
         network: Inferred network.
         network_ambiguous: Whether several networks share these parameters.
         version_byte: Base58 version byte, when applicable.
-        human_readable_part: Bech32 HRP, when applicable.
-        payload_hex: Hash160 or witness program, in hexadecimal.
+        human_readable_part: Bech32 HRP or CashAddr prefix, when applicable.
+        payload_hex: Hash, witness program, or public key, in hexadecimal.
         payload_length_bytes: Payload size.
         checksum_hex: Checksum as encoded.
         recomputed_checksum_hex: Checksum recomputed from the payload.
         checksum_valid: Whether the two agree.
-        script_pubkey_hex: The locking script this address pays to.
+        script_pubkey_hex: The locking script this output pays to.
         script_asm: Human-readable locking script.
-        witness_version: Witness version for SegWit addresses.
+        witness_version: Witness version for SegWit outputs.
         leading_zero_bytes: Zero bytes before the payload (Base58 only).
         base58_leading_ones: Leading ``1`` characters, one per zero byte.
-        payload_profile: Statistical profile of the payload.
-        randomness: Battery over the payload bits.
+        payload_profile: Statistical profile of the payload, when there is one.
+        randomness: Battery over the payload bits, when there is a payload.
         findings: Structural observations.
         scale: The single-scale knowledge report.
         hardness: The backward chain with costs.
         vanity: Prefix analysis.
+        taproot: Taproot key inspection, for P2TR outputs.
+        safety: The offline hazard audit.
         notes: Context for the reader.
         limitations: What the report cannot decide.
     """
@@ -668,6 +922,11 @@ class AddressDissection:
     address: str
     encoding: str
     address_type: str
+    chain: str
+    chain_candidates: tuple[str, ...]
+    chain_ambiguous: bool
+    input_kind: str
+    uri_params: tuple[tuple[str, str], ...]
     network: str
     network_ambiguous: bool
     version_byte: int | None
@@ -682,12 +941,14 @@ class AddressDissection:
     witness_version: int | None
     leading_zero_bytes: int
     base58_leading_ones: int
-    payload_profile: PayloadProfile
-    randomness: RandomnessReport
+    payload_profile: PayloadProfile | None
+    randomness: RandomnessReport | None
     findings: tuple[AddressFinding, ...]
     scale: AddressKnowledgeScale
     hardness: HardnessReport
     vanity: VanityReport
+    taproot: TaprootInfo | None
+    safety: SafetyAudit
     notes: tuple[str, ...]
     limitations: tuple[str, ...]
 
@@ -702,6 +963,11 @@ class AddressDissection:
             "address": self.address,
             "encoding": self.encoding,
             "type": self.address_type,
+            "chain": self.chain,
+            "chain_candidates": list(self.chain_candidates),
+            "chain_ambiguous": self.chain_ambiguous,
+            "input_kind": self.input_kind,
+            "uri_params": [{"name": name, "value": value} for name, value in self.uri_params],
             "network": self.network,
             "network_ambiguous": self.network_ambiguous,
             "version_byte": self.version_byte,
@@ -716,12 +982,16 @@ class AddressDissection:
             "witness_version": self.witness_version,
             "leading_zero_bytes": self.leading_zero_bytes,
             "base58_leading_ones": self.base58_leading_ones,
-            "payload_profile": self.payload_profile.as_dict(),
-            "randomness": self.randomness.as_dict(),
+            "payload_profile": (
+                None if self.payload_profile is None else self.payload_profile.as_dict()
+            ),
+            "randomness": None if self.randomness is None else self.randomness.as_dict(),
             "findings": [finding.as_dict() for finding in self.findings],
             "scale": self.scale.as_dict(),
             "hardness": self.hardness.as_dict(),
             "vanity": self.vanity.as_dict(),
+            "taproot": None if self.taproot is None else self.taproot.as_dict(),
+            "safety": self.safety.as_dict(),
             "recoverable": self.recoverable,
             "notes": list(self.notes),
             "limitations": list(self.limitations),
@@ -731,7 +1001,11 @@ class AddressDissection:
 def _locking_script(
     address_type: str, payload: bytes, witness_version: int | None
 ) -> tuple[str, str]:
-    """Return ``(script_pubkey_hex, asm)`` for the decoded address."""
+    """Return ``(script_pubkey_hex, asm)`` for the decoded output.
+
+    Raises:
+        ValueError: The output type is not recognised.
+    """
     if address_type == "p2pkh":
         return (
             f"76a914{payload.hex()}88ac",
@@ -743,27 +1017,50 @@ def _locking_script(
         return (f"0014{payload.hex()}", f"OP_0 {payload.hex()}")
     if address_type == "p2wsh":
         return (f"0020{payload.hex()}", f"OP_0 {payload.hex()}")
-    version = 0 if witness_version is None else witness_version
-    opcode = 0x00 if version == 0 else 0x50 + version
-    return (
-        f"{opcode:02x}{len(payload):02x}{payload.hex()}",
-        f"OP_{version} {payload.hex()}",
-    )
+    if address_type == "p2tr":
+        return (f"5120{payload.hex()}", f"OP_1 {payload.hex()}")
+    if address_type == "p2pk":
+        return (f"{len(payload):02x}{payload.hex()}ac", f"{payload.hex()} OP_CHECKSIG")
+    if address_type == "op_return":
+        return ("6a", "OP_RETURN")
+    if address_type == "nonstandard":
+        return ("", "unrecognised locking script")
+    if address_type.startswith("witness_v"):
+        version = (
+            witness_version
+            if witness_version is not None
+            else int(address_type.removeprefix("witness_v"))
+        )
+        opcode = 0x00 if version == 0 else 0x50 + version
+        return (
+            f"{opcode:02x}{len(payload):02x}{payload.hex()}",
+            f"OP_{version} {payload.hex()}",
+        )
+    raise ValueError(f"unsupported output type {address_type!r}")
 
 
-def dissect_address(address: str, *, claimed_prefix: str | None = None) -> AddressDissection:
-    """Dissect an address into every public fact and every cost.
+def dissect_address(
+    address: str,
+    *,
+    claimed_prefix: str | None = None,
+    network: str | Network | None = None,
+) -> AddressDissection:
+    """Dissect an address, BIP-21 URI, or locking script into public facts.
 
     Args:
-        address: A Base58Check or SegWit address.
+        address: An address on any registered format, a payment URI, or a raw
+            ``scriptPubKey`` in hexadecimal.
         claimed_prefix: A vanity prefix declared in advance, for the prefix test.
+        network: Expected network.  When given, a mismatch is an error.
 
     Returns:
         The complete dissection.
 
     Raises:
-        AddressEncodingError: The address is malformed or fails validation.
-        ValueError: The claimed prefix is invalid for this address type.
+        AddressEncodingError: The input is malformed or fails validation.
+        InputValidationError: The input is empty or looks like private key
+            material, in which case it is refused without being repeated.
+        ValueError: The claimed prefix is invalid for this input.
 
     Example:
         >>> dissection = dissect_address("1GeMQKJ8rqvRWKLMqyVJjPKmWGcR67ZNmb")
@@ -774,105 +1071,125 @@ def dissect_address(address: str, *, claimed_prefix: str | None = None) -> Addre
         >>> dissection.checksum_valid
         True
     """
-    decoded = decode_address(address)
-    text = decoded.address.strip()
-    lowered = text.lower()
-    payload = bytes.fromhex(decoded.payload_hex)
+    decoded = decode_address_input(address, network=network)
+    payload = decoded.payload
+    kind = decoded.address_type
+    script_hex, script_asm = _locking_script(kind, payload, decoded.witness_version)
+    if decoded.input_kind == "script_pubkey":
+        cleaned = decoded.original.strip().lower()
+        script_hex = cleaned.removeprefix("0x")
 
-    if lowered.startswith(("bc1", "tb1", "bcrt1")):
-        _, _, spec = bech32_decode(lowered)
-        encoding = "bech32" if spec is Bech32Spec.BECH32 else "bech32m"
-        version_byte: int | None = None
-        hrp = lowered.split("1", 1)[0]
-        checksum_hex = ""
-        recomputed = ""
-        valid = True
-        leading_zero_bytes = 0
-        leading_ones = 0
-    else:
-        encoding = "base58check"
-        raw = b58decode(text)
-        version_byte = raw[0]
-        hrp = None
-        checksum_hex = raw[-_BASE58_CHECKSUM_BYTES:].hex()
-        recomputed = double_sha256(raw[:-_BASE58_CHECKSUM_BYTES])[:_BASE58_CHECKSUM_BYTES].hex()
-        valid = checksum_hex == recomputed
-        leading_zero_bytes = len(raw) - len(raw.lstrip(b"\x00"))
-        leading_ones = len(text) - len(text.lstrip("1"))
+    profile = None
+    battery = None
+    findings: tuple[AddressFinding, ...] = ()
+    if payload:
+        profile = _payload_profile(payload, label=_payload_label(kind, len(payload)))
+        battery = randomness_report(bits_from_bytes(payload), data=payload, alpha=0.01)
+        findings = _payload_findings(profile)
 
-    script_hex, script_asm = _locking_script(decoded.address_type, payload, decoded.witness_version)
-    profile = _payload_profile(
-        payload, label="hash160" if len(payload) == 20 else "witness program"
-    )
-    battery = randomness_report(bits_from_bytes(payload), data=payload, alpha=0.01)
-    findings = _payload_findings(profile)
-    candidates_log2 = float(_SCALAR_BITS) - float(len(payload) * 8)
-    scale = AddressKnowledgeScale(
-        address_bits=len(payload) * 8,
-        public_key_candidates_log2=candidates_log2,
-        scalar_bits_known=0.0,
-        scalar_bits_total=_SCALAR_BITS,
-        note=(
-            "The address fixes a 160-bit digest, which leaves about 2^96 public keys "
-            "consistent with it (2^256 points, 2^160 digests). It fixes zero bits of "
-            "the private scalar."
-        ),
-    )
     try:
-        vanity = vanity_report(text, claimed_prefix=claimed_prefix)
+        if decoded.address is None:
+            raise ValueError("script inputs have no address prefix")
+        vanity = vanity_report(
+            decoded.address,
+            claimed_prefix=claimed_prefix,
+            version=decoded.version_byte,
+            payload_length=len(payload) or 20,
+        )
     except ValueError:
         vanity = VanityReport(
-            prefix=text[:6],
+            prefix=(decoded.address or decoded.original)[:6],
             probability=1.0,
             naive_probability=1.0,
             claimed_in_advance=False,
             corrected_probability=1.0,
             verdict="vanity analysis applies to Base58Check addresses only",
-            note="SegWit prefixes are constrained by the HRP, so they are not mined.",
+            note="SegWit and CashAddr prefixes are constrained by their prefix rules, "
+            "so they are not mined.",
         )
 
-    notes = (
-        "Only public data is analysed. An address contains no key material.",
+    safety = audit_decoded_input(decoded, declared_prefix=claimed_prefix)
+    scale = _scale(kind, len(payload))
+    hardness = _hardness(kind, len(payload))
+
+    notes = [
+        "Only public data is analysed. No key material is present in an address.",
         "The checksum was recomputed independently, not just compared.",
-        "The scriptPubKey shown is the one this address pays to; no chain data is read.",
+        "The scriptPubKey shown is the one this output pays to; no chain data is read.",
         "The randomness battery tests the payload as a bit string. A hash should look "
         "random, so failures indicate padding or construction, not weakness of the key.",
-    )
+    ]
+    if decoded.uri_params:
+        notes.append(
+            "The input was a BIP-21 payment URI; its query parameters are reported "
+            "verbatim and validated, never resolved."
+        )
+    if decoded.input_kind == "script_pubkey":
+        notes.append("The input was a raw locking script; the address shown was derived from it.")
+    if decoded.notes:
+        notes.extend(decoded.notes)
+    if decoded.chain != "bitcoin":
+        notes.append(
+            f"The format is registered on {decoded.chain}; version prefixes are "
+            "conventions, so cross-chain identity is advisory."
+        )
+
     limitations = (
         "An address does not reveal its public key, and the report never claims one.",
-        "Ownership, balance, and history require a blockchain; this tool is offline.",
+        "Ownership, balance, and history require chain data; audit-address-data can "
+        "read a file you supply yourself, but this command reads nothing.",
         "Structural statistics describe the payload, not the security of the generator "
         "that produced the key behind it.",
-        "A clean report does not prove the address is safe to receive funds at.",
+        "A clean report does not prove the output is safe to receive funds at.",
     )
 
     return AddressDissection(
-        address=text,
-        encoding=encoding,
-        address_type=decoded.address_type,
+        address=decoded.address or decoded.original,
+        encoding=decoded.encoding,
+        address_type=kind,
+        chain=decoded.chain,
+        chain_candidates=decoded.chain_candidates,
+        chain_ambiguous=len(decoded.chain_candidates) > 1,
+        input_kind=decoded.input_kind,
+        uri_params=decoded.uri_params,
         network=decoded.network,
         network_ambiguous=decoded.network_ambiguous,
-        version_byte=version_byte,
-        human_readable_part=hrp,
-        payload_hex=decoded.payload_hex,
+        version_byte=decoded.version_byte,
+        human_readable_part=decoded.human_readable_part,
+        payload_hex=payload.hex(),
         payload_length_bytes=len(payload),
-        checksum_hex=checksum_hex,
-        recomputed_checksum_hex=recomputed,
-        checksum_valid=valid,
+        checksum_hex=decoded.checksum_hex,
+        recomputed_checksum_hex=decoded.recomputed_checksum_hex,
+        checksum_valid=decoded.checksum_valid,
         script_pubkey_hex=script_hex,
         script_asm=script_asm,
         witness_version=decoded.witness_version,
-        leading_zero_bytes=leading_zero_bytes,
-        base58_leading_ones=leading_ones,
+        leading_zero_bytes=decoded.leading_zero_bytes,
+        base58_leading_ones=decoded.base58_leading_ones,
         payload_profile=profile,
         randomness=battery,
         findings=findings,
         scale=scale,
-        hardness=_hardness(),
+        hardness=hardness,
         vanity=vanity,
-        notes=notes,
+        taproot=safety.taproot,
+        safety=safety,
+        notes=tuple(notes),
         limitations=limitations,
     )
+
+
+def _payload_label(kind: str, length: int) -> str:
+    """Return a human label for the payload of *kind*."""
+    if kind in {"p2pkh", "p2wpkh", "p2sh"}:
+        return "hash160"
+    if kind == "p2wsh":
+        return "sha256 script hash"
+    if kind == "p2tr":
+        return "x-only output key"
+    if kind == "p2pk":
+        return "public key"
+    return f"witness program ({length} bytes)"
 
 
 # ---------------------------------------------------------------------------
@@ -891,7 +1208,8 @@ class ControlledExperiment:
     Attributes:
         address: The target address.
         public_key_hex: The supplied public key (public data, safe to print).
-        derived_addresses: ``((label, address), ...)`` for every supported type.
+        derived_addresses: ``((label, address), ...)`` for P2PKH (compressed and
+            uncompressed), P2WPKH, P2SH-P2WPKH, and Taproot key path.
         matching_labels: Which derivations reproduce the target exactly.
         payload_matches: Whether the hash160 of the compressed key equals the payload.
         verdict: Plain-language conclusion.
@@ -957,19 +1275,24 @@ def controlled_experiment(
         InvalidPublicKeyError: The public key is invalid or not on the curve.
     """
     selected = Network.parse(network)
-    decoded = decode_address(address, selected)
+    decoded = decode_address_input(address, network=selected)
+    target = decoded.address or ""
     derived = (
         ("p2pkh (compressed)", derive_p2pkh_address(public_key_hex, selected).address),
         ("p2pkh (uncompressed)", _uncompressed_p2pkh(public_key_hex, selected)),
         ("p2wpkh", derive_p2wpkh_address(public_key_hex, selected).address),
         ("p2sh-p2wpkh", derive_p2sh_p2wpkh_address(public_key_hex, selected).address),
+        ("p2tr (BIP-341 key path)", derive_p2tr_address(public_key_hex, selected).address),
     )
-    matching = tuple(label for label, value in derived if value == decoded.address)
-    payload_matches = (
-        hash160_public_key(public_key_hex, compressed=True).hex() == decoded.payload_hex
-    )
+    matching = tuple(label for label, value in derived if value == target)
+    payload_matches = hash160_public_key(public_key_hex, compressed=True) == decoded.payload
     if matching:
         verdict = f"exact match: the supplied key derives {matching[0]}"
+    elif decoded.address_type == "p2tr" and _taproot_script_path_note(decoded) and payload_matches:
+        verdict = (
+            "the key matches the payload but the address is a Taproot output, which is "
+            "tweaked; a script-path commitment changes the output key"
+        )
     elif decoded.address_type == "p2pkh" and payload_matches:
         verdict = "the compressed hash160 matches but the address was built from other bytes"
     else:
@@ -978,13 +1301,18 @@ def controlled_experiment(
             "expected unless the key really belongs to it"
         )
     return ControlledExperiment(
-        address=decoded.address,
+        address=target,
         public_key_hex=public_key_hex.strip(),
         derived_addresses=derived,
         matching_labels=matching,
         payload_matches=payload_matches,
         verdict=verdict,
     )
+
+
+def _taproot_script_path_note(decoded: DecodedInput) -> bool:
+    """Return whether a Taproot target could carry a script-path commitment."""
+    return decoded.address_type == "p2tr" and len(decoded.payload) == 32
 
 
 def _uncompressed_p2pkh(public_key_hex: str, network: Network) -> str:

@@ -31,7 +31,12 @@ from pathlib import Path
 from typing import Final
 
 from ._version import __version__
-from .address_forensics import AddressDissection, dissect_address
+from .address_forensics import (
+    AddressDissection,
+    ControlledExperiment,
+    controlled_experiment,
+    dissect_address,
+)
 from .analysis import analyze, attach_hashes
 from .binary_utils import binary_to_bytes
 from .bitcoin import Network, address_from_public_key, decode_address
@@ -79,6 +84,7 @@ from .utils.formatting import (
     safe_display,
 )
 from .utils.logging_utils import configure_logging, get_logger
+from .utxo_audit import UtxoAudit, audit_address_data
 from .validation import normalize_hex
 
 __all__ = ["build_parser", "main"]
@@ -405,7 +411,20 @@ def build_parser() -> argparse.ArgumentParser:
             "step of the backward chain. No key is recovered."
         ),
     )
-    dissect_address_command.add_argument("address", help="Base58Check or SegWit address")
+    dissect_address_command.add_argument(
+        "address",
+        nargs="*",
+        help=(
+            "one or more inputs: a Base58Check, Bech32, Bech32m, or CashAddr address, "
+            "a BIP-21 payment URI, or a raw scriptPubKey in hexadecimal"
+        ),
+    )
+    dissect_address_command.add_argument(
+        "--input-file",
+        default=None,
+        metavar="PATH",
+        help="read inputs one per line; blank lines and # comments are skipped",
+    )
     dissect_address_command.add_argument(
         "--network",
         choices=("mainnet", "testnet", "regtest", "signet"),
@@ -418,8 +437,43 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PREFIX",
         help="a vanity prefix declared in advance; only then is the p-value valid",
     )
+    dissect_address_command.add_argument(
+        "--public-key",
+        default=None,
+        metavar="HEX",
+        help=(
+            "run the controlled experiment against this public key you own "
+            "(derives P2PKH, P2WPKH, P2SH-P2WPKH, and Taproot)"
+        ),
+    )
     _add_report_options(dissect_address_command, flag="--report-format")
     dissect_address_command.set_defaults(handler=_cmd_dissect_address)
+
+    audit_data_command = subparsers.add_parser(
+        "audit-address-data",
+        help="audit a UTXO export you supply, offline",
+        description=(
+            "Check a JSON export you produced yourself (node, wallet, or explorer) "
+            "against an address: does every output pay to its script, do the totals "
+            "add up, are there duplicates, and what is left after spent entries. No "
+            "network request is made; the data is never trusted, only audited."
+        ),
+    )
+    audit_data_command.add_argument("address", help="the address the export describes")
+    audit_data_command.add_argument(
+        "--input-file",
+        required=True,
+        metavar="PATH",
+        help="JSON file with a 'utxos' list (see docs/address_forensics.md)",
+    )
+    audit_data_command.add_argument(
+        "--source",
+        default=None,
+        metavar="TEXT",
+        help="provenance to record instead of the file's own 'source' field",
+    )
+    _add_report_options(audit_data_command, flag="--report-format")
+    audit_data_command.set_defaults(handler=_cmd_audit_address_data)
 
     return parser
 
@@ -1544,9 +1598,14 @@ def _cmd_compare_keys(args: argparse.Namespace) -> int:
     )
 
 
-def _render_address_dissection_text(dissection: AddressDissection) -> str:
+def _render_address_dissection_text(
+    dissection: AddressDissection,
+    *,
+    experiment: ControlledExperiment | None = None,
+) -> str:
     """Render an address dissection as text."""
     profile = dissection.payload_profile
+    safety = dissection.safety
     lines = [
         "address dissection",
         "===================",
@@ -1555,8 +1614,11 @@ def _render_address_dissection_text(dissection: AddressDissection) -> str:
             ("Field", "Value"),
             [
                 ("address", dissection.address),
+                ("input kind", dissection.input_kind),
                 ("encoding", dissection.encoding),
                 ("type", dissection.address_type),
+                ("chain", dissection.chain),
+                ("chain candidates", ", ".join(dissection.chain_candidates)),
                 ("network", dissection.network),
                 ("network ambiguous", "yes" if dissection.network_ambiguous else "no"),
                 (
@@ -1564,7 +1626,7 @@ def _render_address_dissection_text(dissection: AddressDissection) -> str:
                     "-" if dissection.version_byte is None else f"0x{dissection.version_byte:02x}",
                 ),
                 ("HRP", dissection.human_readable_part or "-"),
-                ("payload", dissection.payload_hex),
+                ("payload", dissection.payload_hex or "-"),
                 ("payload bytes", str(dissection.payload_length_bytes)),
                 ("checksum (encoded)", dissection.checksum_hex or "-"),
                 ("checksum (recomputed)", dissection.recomputed_checksum_hex or "-"),
@@ -1577,43 +1639,76 @@ def _render_address_dissection_text(dissection: AddressDissection) -> str:
                 ("leading '1' chars", str(dissection.base58_leading_ones)),
             ],
         ),
-        "",
-        "Locking script",
-        f"  hex : {dissection.script_pubkey_hex}",
-        f"  asm : {dissection.script_asm}",
-        "",
-        "Payload profile",
-        format_table(
-            ("Field", "Value"),
-            [
-                ("bit length", str(profile.bit_length)),
-                ("leading zero bits", str(profile.leading_zero_bits)),
-                ("hamming weight", str(profile.hamming_weight)),
-                ("hamming p-value", f"{profile.hamming_p_value:.4f}"),
-                ("distinct bytes", str(profile.distinct_bytes)),
-                ("byte entropy", f"{profile.byte_entropy:.3f} bits/byte"),
-            ],
-        ),
-        "",
-        "Randomness battery (payload bits)",
-        format_table(
-            ("Test", "Statistic", "p-value", "Result"),
-            [
-                (
-                    test.name,
-                    f"{test.statistic:.4f}",
-                    f"{test.p_value:.3e}",
-                    "pass" if test.passed else "FAIL",
-                )
-                for test in dissection.randomness.tests
-            ],
-        ),
-        f"  Fisher p={dissection.randomness.fisher_p_value:.3e}; "
-        f"Bonferroni p={dissection.randomness.bonferroni_p_value:.3e}; "
-        f"family-wise {'pass' if dissection.randomness.familywise_pass else 'FAIL'}",
-        "",
-        f"Structural findings ({len(dissection.findings)})",
     ]
+    if dissection.uri_params:
+        lines.extend(["", "Payment URI parameters"])
+        lines.append(
+            format_table(
+                ("Name", "Value"),
+                [(name, abbreviate(value, 44)) for name, value in dissection.uri_params],
+            )
+        )
+
+    lines.extend(
+        [
+            "",
+            "Locking script",
+            f"  hex : {dissection.script_pubkey_hex or '-'}",
+            f"  asm : {dissection.script_asm}",
+            "",
+        ]
+    )
+
+    if profile is None:
+        lines.extend(
+            ["Payload profile", "  no payload: the output commits to a script, not a hash"]
+        )
+    else:
+        lines.extend(
+            [
+                "Payload profile",
+                format_table(
+                    ("Field", "Value"),
+                    [
+                        ("label", profile.label),
+                        ("bit length", str(profile.bit_length)),
+                        ("leading zero bits", str(profile.leading_zero_bits)),
+                        ("hamming weight", str(profile.hamming_weight)),
+                        ("hamming p-value", f"{profile.hamming_p_value:.4f}"),
+                        ("distinct bytes", str(profile.distinct_bytes)),
+                        ("byte entropy", f"{profile.byte_entropy:.3f} bits/byte"),
+                    ],
+                ),
+            ]
+        )
+
+    lines.append("")
+    if dissection.randomness is None:
+        lines.extend(["Randomness battery", "  not applicable: there is no payload to test"])
+    else:
+        battery = dissection.randomness
+        lines.append("Randomness battery (payload bits)")
+        lines.append(
+            format_table(
+                ("Test", "Statistic", "p-value", "Result"),
+                [
+                    (
+                        test.name,
+                        f"{test.statistic:.4f}",
+                        f"{test.p_value:.3e}",
+                        "pass" if test.passed else "FAIL",
+                    )
+                    for test in battery.tests
+                ],
+            )
+        )
+        lines.append(
+            f"  Fisher p={battery.fisher_p_value:.3e}; "
+            f"Bonferroni p={battery.bonferroni_p_value:.3e}; "
+            f"family-wise {'pass' if battery.familywise_pass else 'FAIL'}"
+        )
+
+    lines.extend(["", f"Structural findings ({len(dissection.findings)})"])
     if dissection.findings:
         lines.append(
             format_table(
@@ -1630,18 +1725,42 @@ def _render_address_dissection_text(dissection: AddressDissection) -> str:
             )
         )
     else:
-        lines.append("  none: the payload looks like a uniform 160-bit digest")
+        lines.append("  none: the payload looks like a uniform digest")
+
+    if dissection.taproot is not None:
+        taproot = dissection.taproot
+        lines.extend(
+            [
+                "",
+                "Taproot output key",
+                format_table(
+                    ("Field", "Value"),
+                    [
+                        ("output key", taproot.output_key_hex),
+                        ("on curve", "yes" if taproot.valid_x_coordinate else "NO"),
+                        ("even y", "yes" if taproot.even_y else "no"),
+                        ("NUMS point", "yes" if taproot.is_nums_key else "no"),
+                    ],
+                ),
+                f"  note: {taproot.note}",
+            ]
+        )
 
     scale = dissection.scale
+    total = (
+        "unbounded"
+        if dissection.hardness.total_cost_log2 is None
+        else f"2^{dissection.hardness.total_cost_log2:.0f}"
+    )
     lines.extend(
         [
             "",
-            "What the address tells you (one scale)",
+            "What the output tells you (one scale)",
             format_table(
                 ("Question", "Answer"),
                 [
-                    ("bits that specify the address", f"{scale.address_bits}"),
-                    ("public keys still possible", f"2^{scale.public_key_candidates_log2:.0f}"),
+                    ("bits that specify the output", f"{scale.address_bits}"),
+                    ("candidates still possible", f"2^{scale.public_key_candidates_log2:.0f}"),
                     (
                         "bits of the private scalar known",
                         f"{scale.scalar_bits_known:.0f} of {scale.scalar_bits_total}",
@@ -1665,6 +1784,7 @@ def _render_address_dissection_text(dissection: AddressDissection) -> str:
                     for step in dissection.hardness.steps
                 ],
             ),
+            f"  total  : {total}",
             f"  verdict: {dissection.hardness.verdict}",
             "",
             "Prefix analysis",
@@ -1674,9 +1794,48 @@ def _render_address_dissection_text(dissection: AddressDissection) -> str:
             f"  verdict          : {dissection.vanity.verdict}",
             f"  note             : {dissection.vanity.note}",
             "",
-            "Caveats",
+            f"Safety audit (grade: {safety.grade})",
+            format_table(
+                ("Severity", "Code", "What it means"),
+                [
+                    (check.severity, check.code, abbreviate(check.title, 58))
+                    for check in safety.checks
+                ],
+            ),
+            f"  unspendable      : {'yes' if safety.unspendable else 'no'}",
+            f"  anyone can spend : {'yes' if safety.anyone_can_spend else 'no'}",
+            f"  verdict          : {safety.verdict}",
         ]
     )
+    if safety.known_address is not None:
+        entry = safety.known_address
+        lines.extend(
+            [
+                "",
+                f"Documented address: {entry.label}",
+                f"  kind     : {entry.kind}",
+                f"  reference: {entry.reference}",
+                f"  meaning  : {entry.meaning}",
+            ]
+        )
+
+    if experiment is not None:
+        lines.extend(
+            [
+                "",
+                "Controlled experiment (caller-supplied public key)",
+                format_table(
+                    ("Derivation", "Address", "Match"),
+                    [
+                        (label, value, "YES" if label in experiment.matching_labels else "-")
+                        for label, value in experiment.derived_addresses
+                    ],
+                ),
+                f"  verdict: {experiment.verdict}",
+            ]
+        )
+
+    lines.extend(["", "Caveats"])
     lines.extend(f"  - {caveat}" for caveat in dissection.hardness.caveats)
     lines.append("")
     lines.append("Notes")
@@ -1687,21 +1846,316 @@ def _render_address_dissection_text(dissection: AddressDissection) -> str:
     lines.append("")
     lines.append("Warnings:")
     lines.append("  - An address is not a public key; no key material is derived or claimed.")
-    lines.append("  - Ownership, balance, and history require a blockchain. This tool is offline.")
+    lines.append("  - Ownership, balance, and history require chain data. This tool reads none.")
     return "\n".join(lines) + "\n"
 
 
+def _collect_address_inputs(args: argparse.Namespace) -> list[str]:
+    """Return every address, URI, or script the caller asked about.
+
+    Raises:
+        InputValidationError: No input was given.
+    """
+    items: list[str] = list(args.address or [])
+    if args.input_file is not None:
+        path = Path(args.input_file)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ReportGenerationError(f"cannot read {path}: {exc}") from exc
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            items.append(stripped)
+    if not items:
+        raise InputValidationError(
+            "provide at least one address, or pass --input-file with one per line"
+        )
+    return items
+
+
+_ADDRESS_CSV_COLUMNS: Final = (
+    "input",
+    "address",
+    "type",
+    "chain",
+    "network",
+    "encoding",
+    "payload_hex",
+    "script_pubkey_hex",
+    "address_bits",
+    "candidates_log2",
+    "scalar_bits_known",
+    "total_cost_log2",
+    "safety_grade",
+    "unspendable",
+    "anyone_can_spend",
+    "checksum_valid",
+    "findings",
+    "error",
+)
+
+
+def _dissection_csv_row(
+    source: str, dissection: AddressDissection | None, error: str
+) -> dict[str, str]:
+    """Return one CSV row for a dissection or an error."""
+    if dissection is None:
+        row = dict.fromkeys(_ADDRESS_CSV_COLUMNS, "")
+        row["input"] = source
+        row["error"] = error
+        return row
+    total = dissection.hardness.total_cost_log2
+    return {
+        "input": source,
+        "address": dissection.address,
+        "type": dissection.address_type,
+        "chain": dissection.chain,
+        "network": dissection.network,
+        "encoding": dissection.encoding,
+        "payload_hex": dissection.payload_hex,
+        "script_pubkey_hex": dissection.script_pubkey_hex,
+        "address_bits": str(dissection.scale.address_bits),
+        "candidates_log2": f"{dissection.scale.public_key_candidates_log2:g}",
+        "scalar_bits_known": f"{dissection.scale.scalar_bits_known:g}",
+        "total_cost_log2": "" if total is None else f"{total:g}",
+        "safety_grade": dissection.safety.grade,
+        "unspendable": "yes" if dissection.safety.unspendable else "no",
+        "anyone_can_spend": "yes" if dissection.safety.anyone_can_spend else "no",
+        "checksum_valid": "yes" if dissection.checksum_valid else "no",
+        "findings": str(len(dissection.findings)),
+        "error": "",
+    }
+
+
+def _render_csv_rows(columns: tuple[str, ...], rows: list[dict[str, str]]) -> str:
+    """Render rows as CSV text."""
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(columns), lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue()
+
+
+def _summarise_dissections(
+    dissections: list[AddressDissection], errors: list[tuple[str, str]]
+) -> dict[str, object]:
+    """Return aggregate counts for a batch run."""
+    by_type: dict[str, int] = {}
+    by_chain: dict[str, int] = {}
+    by_grade: dict[str, int] = {}
+    for dissection in dissections:
+        by_type[dissection.address_type] = by_type.get(dissection.address_type, 0) + 1
+        by_chain[dissection.chain] = by_chain.get(dissection.chain, 0) + 1
+        by_grade[dissection.safety.grade] = by_grade.get(dissection.safety.grade, 0) + 1
+    return {
+        "items": len(dissections) + len(errors),
+        "parsed": len(dissections),
+        "failed": len(errors),
+        "by_type": dict(sorted(by_type.items())),
+        "by_chain": dict(sorted(by_chain.items())),
+        "by_grade": dict(sorted(by_grade.items())),
+        "unspendable": sum(1 for item in dissections if item.safety.unspendable),
+        "anyone_can_spend": sum(1 for item in dissections if item.safety.anyone_can_spend),
+        "checksum_failures": sum(1 for item in dissections if not item.checksum_valid),
+    }
+
+
 def _cmd_dissect_address(args: argparse.Namespace) -> int:
-    dissection = dissect_address(args.address, claimed_prefix=args.claimed_prefix)
-    _LOGGER.info("address dissection completed")
-    if args.report_format == "json":
-        payload = json.dumps(dissection.as_dict(), indent=2, sort_keys=True, ensure_ascii=False)
-        return _emit_batch(payload + "\n", output=args.output, overwrite=args.overwrite)
-    return _emit_batch(
-        _render_address_dissection_text(dissection),
-        output=args.output,
-        overwrite=args.overwrite,
+    items = _collect_address_inputs(args)
+    dissections: list[AddressDissection] = []
+    errors: list[tuple[str, str]] = []
+    experiment: ControlledExperiment | None = None
+    for item in items:
+        try:
+            dissection = dissect_address(
+                item,
+                claimed_prefix=args.claimed_prefix,
+                network=args.network,
+            )
+        except BinaryCryptoLabError as exc:
+            errors.append((item, str(exc)))
+            continue
+        if args.public_key is not None and experiment is None:
+            experiment = controlled_experiment(
+                dissection.address, args.public_key, network=args.network or "mainnet"
+            )
+        dissections.append(dissection)
+
+    if not dissections and errors:
+        for item, message in errors:
+            print(f"error: {abbreviate(item, 24)}: {message}", file=sys.stderr)
+        return EXIT_ERROR
+
+    fmt = args.report_format
+    if fmt == "json":
+        if len(items) == 1 and len(dissections) == 1:
+            document: object = dissections[0].as_dict()
+            if experiment is not None:
+                document = {
+                    **dissections[0].as_dict(),
+                    "controlled_experiment": experiment.as_dict(),
+                }
+        else:
+            document = {
+                "items": [item.as_dict() for item in dissections],
+                "errors": [{"input": source, "error": message} for source, message in errors],
+                "summary": _summarise_dissections(dissections, errors),
+            }
+            if experiment is not None:
+                document["controlled_experiment"] = experiment.as_dict()
+        text = json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        code = EXIT_ERROR if errors else EXIT_SUCCESS
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite) or code
+    if fmt == "csv":
+        rows = [_dissection_csv_row(item.address, item, "") for item in dissections]
+        rows.extend(_dissection_csv_row(source, None, message) for source, message in errors)
+        text = _render_csv_rows(_ADDRESS_CSV_COLUMNS, rows)
+        code = EXIT_ERROR if errors else EXIT_SUCCESS
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite) or code
+
+    if len(dissections) == 1 and not errors:
+        text = _render_address_dissection_text(dissections[0], experiment=experiment)
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+
+    summary = _summarise_dissections(dissections, errors)
+    lines = [
+        "address batch",
+        "=============",
+        "",
+        f"items     : {summary['items']}",
+        f"parsed    : {summary['parsed']}",
+        f"failed    : {summary['failed']}",
+        f"by type   : {summary['by_type']}",
+        f"by chain  : {summary['by_chain']}",
+        f"by grade  : {summary['by_grade']}",
+        f"unspendable      : {summary['unspendable']}",
+        f"anyone can spend : {summary['anyone_can_spend']}",
+        "",
+        "Per item",
+    ]
+    for dissection in dissections:
+        total = dissection.hardness.total_cost_log2
+        cost = "unbounded" if total is None else f"2^{total:.0f}"
+        lines.append(
+            f"  {abbreviate(dissection.address, 34):34s} {dissection.address_type:11s} "
+            f"{dissection.chain:12s} {dissection.network:8s} "
+            f"cost={cost:<10s} grade={dissection.safety.grade}"
+        )
+        if dissection.safety.unspendable or dissection.safety.anyone_can_spend:
+            lines.append(f"      hazard: {dissection.safety.verdict}")
+    if errors:
+        lines.extend(["", "Errors"])
+        lines.extend(f"  {abbreviate(source, 34):34s} {message}" for source, message in errors)
+    lines.extend(
+        [
+            "",
+            "Warnings:",
+            "  - A valid checksum proves encoding, not ownership or balance.",
+            "  - No key material is derived, stored, or claimed for any input.",
+        ]
     )
+    text = "\n".join(lines) + "\n"
+    code = EXIT_ERROR if errors else EXIT_SUCCESS
+    return _emit_batch(text, output=args.output, overwrite=args.overwrite) or code
+
+
+def _render_utxo_audit_text(audit: UtxoAudit) -> str:
+    """Render a user-supplied data audit as text."""
+    lines = [
+        "address data audit (offline)",
+        "============================",
+        "",
+        format_table(
+            ("Field", "Value"),
+            [
+                ("address", audit.address),
+                ("source", audit.source),
+                ("outputs listed", str(len(audit.utxos))),
+                ("total reported", f"{audit.total_btc} BTC"),
+                ("confirmed", f"{_sats_to_btc(audit.confirmed_sats)} BTC"),
+                ("unconfirmed", f"{_sats_to_btc(audit.unconfirmed_sats)} BTC"),
+                ("marked spent", f"{_sats_to_btc(audit.spent_sats)} BTC"),
+                ("balance after spent", f"{audit.balance_btc} BTC"),
+                ("trusted", "no: the data is yours, not verified"),
+            ],
+        ),
+        "",
+        "Outputs",
+    ]
+    if audit.utxos:
+        lines.append(
+            format_table(
+                ("Outpoint", "Value (BTC)", "Height", "Script"),
+                [
+                    (
+                        abbreviate(utxo.outpoint, 40),
+                        _sats_to_btc(utxo.value_sats),
+                        "-" if utxo.height is None else str(utxo.height),
+                        "match"
+                        if utxo.script_matches
+                        else ("mismatch" if utxo.script_matches is False else "not given"),
+                    )
+                    for utxo in audit.utxos
+                ],
+            )
+        )
+    else:
+        lines.append("  none listed")
+    lines.extend(["", "Problems"])
+    if audit.problems:
+        lines.extend(f"  - {problem}" for problem in audit.problems)
+    else:
+        lines.append("  none: the file is internally consistent")
+    if audit.duplicates:
+        lines.extend(["", "Duplicated outpoints"])
+        lines.extend(f"  - {outpoint}" for outpoint in audit.duplicates)
+    lines.extend(["", f"Verdict: {audit.verdict}", "", "Notes"])
+    lines.extend(f"  - {note}" for note in audit.notes)
+    lines.extend(
+        [
+            "",
+            "Warnings:",
+            "  - No network request was made; this is arithmetic over a file you supplied.",
+            "  - A balance in a file is not a balance on chain.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _sats_to_btc(value: int) -> str:
+    """Format satoshis as an exact BTC decimal string."""
+    sign = "-" if value < 0 else ""
+    magnitude = abs(value)
+    return f"{sign}{magnitude // 100_000_000}.{magnitude % 100_000_000:08d}"
+
+
+def _cmd_audit_address_data(args: argparse.Namespace) -> int:
+    audit = audit_address_data(args.address, args.input_file, source=args.source)
+    _LOGGER.info("address data audit completed")
+    if args.report_format == "json":
+        text = json.dumps(audit.as_dict(), indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+    if args.report_format == "csv":
+        rows = [
+            {
+                "outpoint": utxo.outpoint,
+                "value_sats": str(utxo.value_sats),
+                "height": "" if utxo.height is None else str(utxo.height),
+                "spent_by": utxo.spent_by or "",
+                "script_matches": (
+                    "" if utxo.script_matches is None else ("yes" if utxo.script_matches else "no")
+                ),
+                "problems": "; ".join(utxo.problems),
+            }
+            for utxo in audit.utxos
+        ]
+        text = _render_csv_rows(
+            ("outpoint", "value_sats", "height", "spent_by", "script_matches", "problems"), rows
+        )
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+    return _emit_batch(_render_utxo_audit_text(audit), output=args.output, overwrite=args.overwrite)
 
 
 # ---------------------------------------------------------------------------

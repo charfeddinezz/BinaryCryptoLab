@@ -228,9 +228,9 @@ class TestDissectAddress:
         assert "preimage" in joined
 
     def test_notes_and_limitations(self, dissection: AddressDissection) -> None:
-        assert len(dissection.notes) == 4
+        assert len(dissection.notes) >= 4
         assert len(dissection.limitations) == 4
-        assert any("offline" in item for item in dissection.limitations)
+        assert any("chain data" in item for item in dissection.limitations)
 
     def test_as_dict_round_trips(self, dissection: AddressDissection) -> None:
         payload = dissection.as_dict()
@@ -240,6 +240,11 @@ class TestDissectAddress:
             "address",
             "encoding",
             "type",
+            "chain",
+            "chain_candidates",
+            "chain_ambiguous",
+            "input_kind",
+            "uri_params",
             "network",
             "network_ambiguous",
             "version_byte",
@@ -260,6 +265,8 @@ class TestDissectAddress:
             "scale",
             "hardness",
             "vanity",
+            "taproot",
+            "safety",
             "recoverable",
             "notes",
             "limitations",
@@ -348,9 +355,15 @@ class TestControlledExperiment:
     def test_lists_every_derivation(self) -> None:
         public_key = public_key_from_private(7).compressed_hex
         result = controlled_experiment(SAMPLE_ADDRESS, public_key)
-        assert len(result.derived_addresses) == 4
+        assert len(result.derived_addresses) == 5
         labels = [label for label, _ in result.derived_addresses]
-        assert labels == ["p2pkh (compressed)", "p2pkh (uncompressed)", "p2wpkh", "p2sh-p2wpkh"]
+        assert labels == [
+            "p2pkh (compressed)",
+            "p2pkh (uncompressed)",
+            "p2wpkh",
+            "p2sh-p2wpkh",
+            "p2tr (BIP-341 key path)",
+        ]
 
     def test_rejects_an_invalid_public_key(self) -> None:
         with pytest.raises((InvalidPublicKeyError, ValueError)):

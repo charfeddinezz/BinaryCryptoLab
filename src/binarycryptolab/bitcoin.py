@@ -27,14 +27,23 @@ from typing import Any, Final
 
 from .base58 import base58check_decode, base58check_encode
 from .bech32 import decode_segwit_address, encode_segwit_address
+from .curve_arithmetic import add, decode_public_key, multiply
 from .ecc import (
+    CURVE_ORDER,
+    FIELD_PRIME,
+    GENERATOR,
     PublicKeyInfo,
     parse_public_key_hex,
     public_key_bytes,
     public_key_info_from_hex,
 )
-from .exceptions import AddressEncodingError, InputValidationError, InvalidBech32Error
-from .hashing import hash160
+from .exceptions import (
+    AddressEncodingError,
+    InputValidationError,
+    InvalidBech32Error,
+    InvalidPublicKeyError,
+)
+from .hashing import hash160, sha256
 
 __all__ = [
     "AddressInfo",
@@ -46,6 +55,7 @@ __all__ = [
     "decode_address",
     "derive_p2pkh_address",
     "derive_p2sh_p2wpkh_address",
+    "derive_p2tr_address",
     "derive_p2wpkh_address",
     "hash160_public_key",
     "is_valid_address",
@@ -61,6 +71,7 @@ _TESTNET_VERSION: Final = 0x6F
 _P2SH_VERSION_TESTNET: Final = 0xC4
 _WITNESS_V0_KEYHASH_LENGTH: Final = 20
 _WITNESS_V0_SCRIPTHASH_LENGTH: Final = 32
+_TAPROOT_TAG: Final = "TapTweak"
 
 
 class Network(StrEnum):
@@ -226,6 +237,89 @@ class DecodedAddress:
             "payload_hex": self.payload_hex,
             "witness_version": self.witness_version,
         }
+
+
+def _tagged_hash(tag: str, message: bytes) -> bytes:
+    """Return ``SHA256(SHA256(tag) || SHA256(tag) || message)`` (BIP-340 style)."""
+    tag_digest = sha256(tag.encode())
+    return sha256(tag_digest + tag_digest + message)
+
+
+def taproot_output_key(public_key_hex: str, *, script_root: bytes | None = None) -> bytes:
+    """Return the 32-byte x-only Taproot output key for an internal key.
+
+    The BIP-341 key-path tweak is applied: the internal key is normalised to even
+    ``y``, ``t = int(tagged_hash("TapTweak", x || script_root))``, and the output
+    key is the x-coordinate of ``P + t*G``.
+
+    Args:
+        public_key_hex: SEC 1 internal public key.
+        script_root: Optional 32-byte Merkle root of the script tree.
+
+    Returns:
+        The x-only output key.
+
+    Raises:
+        InvalidPublicKeyError: The key is invalid.
+        AddressEncodingError: The script root is not 32 bytes.
+    """
+    point = decode_public_key(public_key_hex)
+    if point is None:  # pragma: no cover - decode_public_key never returns infinity
+        raise InvalidPublicKeyError("the point at infinity is not a public key")
+    x_coordinate, y_coordinate = point
+    if y_coordinate % 2:
+        y_coordinate = FIELD_PRIME - y_coordinate
+    even_point = (x_coordinate, y_coordinate)
+    message = x_coordinate.to_bytes(32, "big")
+    if script_root is not None:
+        if len(script_root) != 32:
+            raise AddressEncodingError("the Taproot script root must be 32 bytes")
+        message += script_root
+    tweak = int.from_bytes(_tagged_hash(_TAPROOT_TAG, message), "big")
+    if tweak >= CURVE_ORDER:
+        raise AddressEncodingError("the Taproot tweak is not a valid scalar")
+    output = add(even_point, multiply(GENERATOR, tweak))
+    if output is None:
+        raise AddressEncodingError("the Tweaked key is the point at infinity")
+    return output[0].to_bytes(32, "big")
+
+
+def derive_p2tr_address(
+    public_key_hex: str,
+    network: str | Network = Network.MAINNET,
+    *,
+    script_root: bytes | None = None,
+) -> AddressInfo:
+    """Derive a Taproot (P2TR, Bech32m) address from a public key.
+
+    Args:
+        public_key_hex: SEC 1 public key, used as the internal key.
+        network: Destination network.
+        script_root: Optional Merkle root for script-path commitments.
+
+    Returns:
+        The derived address, its output key, and its locking script.
+
+    Raises:
+        InvalidPublicKeyError: The key is invalid.
+        AddressEncodingError: The network or script root is invalid.
+    """
+    selected = Network.parse(network)
+    output_key = taproot_output_key(public_key_hex, script_root=script_root)
+    address = encode_segwit_address(selected.bech32_hrp, 1, output_key)
+    return AddressInfo(
+        address=address,
+        address_type="p2tr",
+        network=selected.value,
+        hash160_hex="",
+        public_key_hex=public_key_bytes(
+            parse_public_key_hex(public_key_hex), compressed=True
+        ).hex(),
+        public_key_encoding="x-only (BIP-340 output key)",
+        witness_version=1,
+        witness_program_hex=output_key.hex(),
+        script_pubkey_hex=f"5120{output_key.hex()}",
+    )
 
 
 def hash160_public_key(public_key_hex: str, *, compressed: bool | None = None) -> bytes:

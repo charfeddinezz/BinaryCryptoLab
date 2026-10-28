@@ -521,10 +521,11 @@ class TestDissectAddressCommand:
         assert "ab9a4edd7600fe91d0f46a97dc851ad45c1ce176" in out
         assert "checksum valid         yes" in out
         assert "Randomness battery" in out
-        assert "What the address tells you" in out
+        assert "What the output tells you" in out
         assert "Backward chain" in out
         assert "can this tool recover the key       no" in out
         assert "An address is not a public key" in out
+        assert "Safety audit" in out
 
     def test_reports_no_recovery(self, cli_runner: CliRunner) -> None:
         code, out, _ = cli_runner(["dissect-address", self.ADDRESS])

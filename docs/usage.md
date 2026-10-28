@@ -54,7 +54,8 @@ COMMAND
   dissect-public-key  dissect a public key and forecast its structure
   assemble-private-key  assemble a scalar from known hex digits plus a bounded search
   compare-keys        compare a set of public keys and detect related scalars
-  dissect-address     dissect an address into public facts and backward costs
+  dissect-address     dissect addresses, URIs, and scripts into public facts
+  audit-address-data  audit a UTXO export you supply, offline
 ```
 
 Global options must appear **before** the command:
@@ -527,46 +528,127 @@ the difference only.
 ## dissect-address
 
 ```bash
+# one address, any supported format
 binarycryptolab dissect-address 1GeMQKJ8rqvRWKLMqyVJjPKmWGcR67ZNmb
-binarycryptolab dissect-address bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 --network mainnet
-binarycryptolab dissect-address 1GeMQKJ8... --claimed-prefix 1Ge --report-format json
+binarycryptolab dissect-address bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0
+
+# a BIP-21 payment URI, or a raw locking script
+binarycryptolab dissect-address "bitcoin:1GeMQKJ8...?amount=0.01&label=rent"
+binarycryptolab dissect-address 76a914ab9a4edd7600fe91d0f46a97dc851ad45c1ce17688ac
+
+# a batch, from arguments or a file, with CSV or JSON output
+binarycryptolab dissect-address 1GeM... bc1p... bitcoincash:qpm2...
+binarycryptolab dissect-address --input-file addresses.txt --report-format csv
+
+# the controlled experiment: your own public key against an address
+binarycryptolab dissect-address bc1p... --public-key 02...
 ```
 
-An address is a first-class input here. The command decodes it, **re-derives the
-checksum itself**, prints the exact locking script, profiles the payload with a
-seven-test randomness battery plus exact combinatorial tests, and then prices the
-backward chain in base-2 operations.
+### Accepted inputs
 
-What the report contains:
+| Input | Example | Handled as |
+| --- | --- | --- |
+| Base58Check | `1GeM...`, `3J98...`, `L...`, `D...`, `t1...` | Bitcoin, Litecoin, Dogecoin, Dash, Zcash |
+| Bech32 / Bech32m | `bc1q...`, `bc1p...`, `tb1...`, `bcrt1...`, `ltc1...` | SegWit v0 and Taproot |
+| Upper case Bech32 | `BC1Q...` | Normalised to lower case |
+| CashAddr | `bitcoincash:qpm2...`, `bchtest:...` | Bitcoin Cash |
+| BIP-21 URI | `bitcoin:ADDR?amount=0.5` | Address plus validated parameters |
+| scriptPubKey | `76a914...88ac`, `5120...` | P2PKH, P2SH, P2WPKH, P2WSH, P2TR, P2PK, OP_RETURN |
+| Forced script | `script:deadbeef` | Non-standard scripts, on request |
+| WIF private key | `5Hue...`, `L1a...` | **Refused**, never echoed |
+| Whitespace, quotes, zero-width characters | `" bc1q... "` | Stripped before decoding |
+
+Bare hexadecimal that is not a recognised script is rejected rather than guessed:
+`ab9a...e176` could be a hash, a key, or a script, so the tool asks for `script:`
+to mean a script, and an address otherwise.
+
+### Report sections
 
 | Section | Content |
 | --- | --- |
-| Identity | encoding (`base58check`, `bech32`, `bech32m`), type, network, version byte or HRP, witness version |
-| Integrity | encoded checksum, recomputed checksum, and whether they agree |
-| Locking script | the exact `scriptPubKey` bytes and their disassembly |
+| Identity | encoding, type, chain, chain candidates, network, version byte or HRP, witness version, input kind |
+| Integrity | encoded and recomputed checksum, and whether they agree |
+| Payment URI | every BIP-21 parameter, verbatim |
+| Locking script | the exact scriptPubKey bytes and their disassembly |
 | Payload profile | bit length, leading zero bits, Hamming weight with an exact binomial p-value, distinct bytes, byte entropy, nibble frequencies |
-| Randomness | monobit, runs, longest run, serial correlation, approximate entropy, nibble uniformity, distinct bytes - each with a p-value, plus a Fisher combination and a Bonferroni-adjusted family-wise verdict |
-| Findings | structural oddities such as leading zero bits, extreme Hamming weight, nibble skew, a constant payload, or a palindromic payload - each with the probability of arising by chance |
-| One scale | bits that specify the address, public keys still consistent with it, and bits of the private scalar that are known (**always zero**) |
-| Backward chain | address to payload (free), payload to public key (2^160, preimage), public key to scalar (2^128, Pollard rho) |
-| Prefix analysis | the observed prefix, its **exact** probability, the naive `58^-k` figure for comparison, and a verdict |
-| Caveats | Grover (`2^80` on a future machine), Shor, the collision-versus-preimage distinction, and the look-elsewhere effect |
+| Randomness | seven tests with p-values, a Fisher combination, and a Bonferroni verdict |
+| Findings | structural oddities with the probability of arising by chance |
+| Taproot | output key, on-curve check, y parity, NUMS-key check |
+| One scale | bits that specify the output, candidates still possible, bits of the scalar known |
+| Backward chain | per-type costs: 2^288 for P2PKH, 2^128 for Taproot, 2^0 for an undefined witness version |
+| Prefix analysis | observed prefix, exact probability, naive `58^-k`, verdict |
+| Safety audit | documented hazards, graded `danger` / `review` / `no-known-hazard` |
+| Caveats | Grover, Shor, collision-versus-preimage, look-elsewhere |
 
-Two details are worth stating plainly, because they are the usual source of
-misleading claims:
+### Address types and what the chain costs
 
-* **The naive prefix probability is wrong.** `58^-k` ignores that the version byte
-  is fixed and that the digit count is fixed. The module counts integers exactly,
-  which raises the probability of `1G` from `1.72e-02` to `4.36e-02` - a factor
-  of about 2.5. Both figures are reported so the difference is visible.
-* **A prefix you noticed after the fact is not evidence.** If `--claimed-prefix`
-  is not supplied, the corrected probability is `1.0` and the verdict says the
-  prefix was found after seeing the address. Only a prefix declared in advance
-  carries its nominal p-value.
+| Type | Payload | Backward chain | Note |
+| --- | --- | --- | --- |
+| P2PKH, P2WPKH | 20-byte hash | `2^288` | hash preimage `2^160`, then discrete log `2^128` |
+| P2SH | 20-byte script hash | `2^160` | scripts come from a small family, so the real barrier is lower |
+| P2WSH | 32-byte script hash | `2^256` | same caveat: guessing the script family beats brute force |
+| P2TR | 32-byte x-only key | `2^128` | no hash layer at all: the address *is* a public key |
+| witness v2..v16 | any program | `2^0` | unencumbered by BIP-141: anyone can spend |
+| P2PK | public key | `2^128` | the key is published in the output |
+| OP_RETURN | none | unspendable | a data carrier, not a destination |
 
-The report ends with `2^96` candidate public keys and `0` of `256` scalar bits
-known. That is the honest summary: an address is a one-way commitment, and this
-command measures the commitment rather than breaking it.
+### Batch behaviour
+
+* Every argument and every non-comment line of `--input-file` is one item.
+* One item prints the full report; several print an aggregate summary.
+* `--report-format csv` emits one row per item, with an `error` column.
+* `--report-format json` emits the single dissection when there is exactly one
+  item, and an envelope with `items`, `errors`, and `summary` otherwise.
+* Exit code `1` means at least one item failed; the successful ones are still
+  reported. Passing no input at all is also exit code `1`.
+
+### Two honesty rules that the report enforces
+
+* **The naive prefix probability is wrong.** `58^-k` ignores the fixed version byte
+  and the fixed digit count. The module counts integers exactly: `1G` is `4.36e-02`,
+  not `1.72e-02`.
+* **A prefix noticed after the fact is not evidence.** Without `--claimed-prefix`
+  the corrected probability is `1.0` and the verdict says so.
+
+## audit-address-data
+
+```bash
+binarycryptolab audit-address-data 1GeM... --input-file export.json
+binarycryptolab audit-address-data 1GeM... --input-file export.json --source "node, 2026-10-28"
+binarycryptolab audit-address-data 1GeM... --input-file export.json --report-format json
+```
+
+The dissection report states that balance and history need chain data. This
+command closes as much of that gap as can be closed offline: **you** export the
+data, and the tool checks it.
+
+```json
+{
+  "address": "1GeMQKJ8rqvRWKLMqyVJjPKmWGcR67ZNmb",
+  "source": "my node, exported 2026-10-28",
+  "utxos": [
+    {"txid": "ab...", "vout": 0, "value_sats": 150000, "height": 800000,
+     "script_pubkey_hex": "76a914ab9a4edd7600fe91d0f46a97dc851ad45c1ce17688ac"},
+    {"txid": "cd...", "vout": 1, "value_btc": "0.00025000"}
+  ]
+}
+```
+
+Checks performed:
+
+| Check | What it catches |
+| --- | --- |
+| Script match | an export built for a different address, or the wrong column pasted |
+| Outpoint duplicates | double-counted outputs |
+| Value sanity | negative values, zero (below dust), more than eight decimals |
+| Supply bound | a total above 21 million BTC, which cannot be real |
+| Spent entries | a "UTXO" list that contains already-spent outputs |
+| Address agreement | a file that names a different address than the one audited |
+| Confirmed versus unconfirmed | how much of the balance is not yet mined |
+
+The report always says `trusted: no`. A file you supply is arithmetic, not truth:
+the tool cannot know whether it is complete, current, or honest, and it makes no
+network request to find out.
 
 ## Reports
 

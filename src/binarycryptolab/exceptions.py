@@ -26,6 +26,7 @@ __all__ = [
     "InvalidHexError",
     "InvalidPrivateKeyError",
     "InvalidPublicKeyError",
+    "PrivateKeyMaterialError",
     "ReportGenerationError",
     "UnsupportedHashError",
 ]
@@ -92,3 +93,11 @@ class InvalidBech32Error(Bech32Error):
 
 class ReportGenerationError(BinaryCryptoLabError):
     """Raised when a report cannot be rendered or written safely."""
+
+
+class PrivateKeyMaterialError(InputValidationError):
+    """Raised when input looks like private key material and is refused.
+
+    The message never repeats the input: a refused secret must not reach a log,
+    a terminal scrollback, or an error report.
+    """

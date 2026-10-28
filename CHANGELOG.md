@@ -4,6 +4,53 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-10-28
+
+### Added
+
+* **`binarycryptolab.address_formats`** - one decoder for every accepted input:
+  * Base58Check on Bitcoin, Bitcoin Cash (legacy), Litecoin, Dogecoin, Dash, and
+    Zcash (two-byte prefixes), reporting **every** chain consistent with a version
+    byte instead of inventing certainty;
+  * Bech32 and Bech32m for any registered HRP (`bc`, `tb`, `bcrt`, `ltc`, `tltc`,
+    `rltc`), in either case, with unknown HRPs decoded and labelled instead of
+    rejected;
+  * CashAddr (`bitcoincash:`, `bchtest:`, `bchreg:`) with a from-scratch checksum
+    implementation, validated by re-encoding the published example back to itself;
+  * BIP-21 payment URIs, with query parameters preserved and validated;
+  * raw `scriptPubKey` input covering P2PKH, P2SH, P2WPKH, P2WSH, P2TR, witness
+    versions 1-16, P2PK, OP_RETURN, and non-standard scripts (behind `script:`);
+  * **WIF private keys are refused**, and the message never repeats the input.
+* **`binarycryptolab.address_safety`** - an offline hazard audit graded
+  `danger` / `review` / `no-known-hazard`: documented burn and genesis addresses,
+  constant payloads, undefined witness versions (unencumbered, anyone can spend),
+  malformed Taproot programs, NUMS output keys, off-curve Taproot keys, opaque
+  script hashes, published public keys, OP_RETURN, non-standard scripts, test
+  networks, ambiguous chains, and hostile BIP-21 amounts or `req-` parameters.
+* **`binarycryptolab.utxo_audit`** - `audit-address-data` checks a UTXO export the
+  caller supplies: script match, duplicate outpoints, value and supply bounds,
+  spent entries, confirmed versus unconfirmed totals, and exact BTC formatting.
+  The report always states `trusted: false` and that no network request was made.
+* **Taproot derivation** - `derive_p2tr_address` applies the BIP-341 key-path tweak
+  and is cross-checked against OpenSSL by deriving `(k + t) * G` for random keys,
+  so a bug in the point arithmetic cannot pass unnoticed.
+* **Per-type backward costs** - P2PKH/P2WPKH `2^288`, P2SH `2^160`, P2WSH `2^256`,
+  Taproot `2^128` (no hash layer), P2PK `2^128`, undefined witness versions `2^0`,
+  OP_RETURN unspendable.
+* **Batch dissection** - several inputs, `--input-file`, CSV and JSON envelopes,
+  per-item errors, and an aggregate summary by type, chain, and safety grade.
+* **`dissect-address --public-key`** runs the controlled experiment inline,
+  including Taproot key-path derivation.
+* 164 new tests (1196 total), a new `docs/address_scenarios.md`, and an Arabic
+  section in `docs/how_it_works_ar.md`.
+
+### Changed
+
+* `dissect-address` accepts zero or more positional inputs; a single address keeps
+  the previous single-report output exactly.
+* Bare hexadecimal that is not a recognised script is now rejected with guidance
+  instead of being guessed at; `script:<hex>` forces script interpretation.
+
 ## [1.4.0] - 2026-10-28
 
 ### Added
