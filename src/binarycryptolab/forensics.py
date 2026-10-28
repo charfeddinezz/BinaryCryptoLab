@@ -68,6 +68,12 @@ from .ecc import (
 )
 from .exceptions import AddressEncodingError, BinaryCryptoLabError, InvalidPublicKeyError
 from .hashing import double_sha256, hash160, ripemd160, sha256, sha512
+from .randomness import RandomnessReport, bits_from_bytes, randomness_report
+from .special_functions import (
+    binomial_two_sided_p,
+    fisher_combine,
+    log2_sum_exp,
+)
 from .statistics import bit_statistics, byte_statistics
 from .validation import normalize_hex
 
@@ -75,8 +81,10 @@ __all__ = [
     "ALL_NETWORKS",
     "DEPTH_LEVELS",
     "AddressMatrixEntry",
+    "BayesFactor",
     "BitProfile",
     "CoordinateProfile",
+    "EvidenceContribution",
     "Forecast",
     "ForecastHypothesis",
     "MirrorPoint",
@@ -119,6 +127,7 @@ _KNOWN_CONSTANTS: Final[tuple[str, ...]] = (
     "decafbad",
 )
 
+_ALPHA: Final = 0.01
 _ASCII_MINIMUM_RUN: Final = 5
 _MAX_FINDING_SURPRISAL: Final = 64.0
 
@@ -154,38 +163,14 @@ def _surprisal(probability: float) -> float:
 
 
 def _binomial_two_sided_p(observed: int, trials: int = _BITS, bias: float = 0.5) -> float:
-    """Two-sided binomial tail probability for a bit count.
+    """Two-sided binomial tail probability (thin wrapper for internal use).
 
-    Args:
-        observed: Number of ones observed.
-        trials: Number of independent bits.
-        bias: Probability of a one under the null hypothesis.
-
-    Returns:
-        ``P(|X - trials*bias| >= |observed - trials*bias|)`` for
-        ``X ~ Binomial(trials, bias)``, computed exactly with integer
-        combinatorics and converted to a float at the end.
+    Delegates to :func:`binarycryptolab.special_functions.binomial_two_sided_p`,
+    which computes the ``bias = 0.5`` case exactly with integer combinatorics.
     """
     if not 0 <= observed <= trials:
         raise ValueError("observed must be between 0 and trials")
-    expected = trials * bias
-    distance = abs(observed - expected)
-    if distance == 0:
-        return 1.0
-    if bias == 0.5:
-        integer_tail = sum(
-            math.comb(trials, index)
-            for index in range(trials + 1)
-            if abs(index - expected) >= distance
-        )
-        return min(1.0, integer_tail / (1 << trials))
-    # General case: accumulate the probability mass directly.
-    accumulated = 0.0
-    for index in range(trials + 1):
-        if abs(index - expected) < distance:
-            continue
-        accumulated += math.comb(trials, index) * (bias**index) * ((1.0 - bias) ** (trials - index))
-    return min(1.0, accumulated)
+    return binomial_two_sided_p(observed, trials=trials, bias=bias)
 
 
 def _limbs(value: int, base_bits: int, width: int = _BITS) -> tuple[int, ...]:
@@ -517,17 +502,118 @@ class SearchEstimate:
         }
 
 
+def _significant(value: float, digits: int = 6) -> float:
+    """Round to *digits* significant figures.
+
+    ``round`` uses decimal places, which would turn ``1.97e-118`` into ``0.0``;
+    probabilities must keep their magnitude.
+    """
+    return float(f"{value:.{digits}g}")
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceContribution:
+    """One independent line of statistical evidence.
+
+    Findings and randomness tests are grouped into families because several of
+    them measure the same underlying fact.  Only the strongest member of each
+    family contributes, so correlated measurements cannot multiply the evidence.
+
+    Attributes:
+        family: Evidence family name, for example ``"magnitude"``.
+        p_value: Smallest p-value observed in the family.
+        surprisal_bits: ``-log2(p_value)``, capped at 64.
+        sources: Finding codes and test names that produced the value.
+        interpretation: What a small p-value in this family means.
+    """
+
+    family: str
+    p_value: float
+    surprisal_bits: float
+    sources: tuple[str, ...]
+    interpretation: str
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable representation."""
+        return {
+            "family": self.family,
+            "p_value": self.p_value,
+            "surprisal_bits": self.surprisal_bits,
+            "sources": list(self.sources),
+            "interpretation": self.interpretation,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class BayesFactor:
+    r"""Posterior calculation for one generation hypothesis.
+
+    The posterior follows Bayes' rule in log space:
+
+    .. math::  \log P(H_i | D) = \log P(H_i) + \log BF_i - \log Z
+
+    with :math:`Z = \sum_j P(H_j) BF_j`.  Priors are stated explicitly so the
+    reader can substitute their own belief.
+
+    Attributes:
+        hypothesis: The generation story.
+        prior: Prior probability assigned before looking at the key.
+        log2_bayes_factor: Evidence for the hypothesis relative to the
+            uniform-random reference model, in bits.
+        posterior: Normalised posterior probability (may underflow to 0.0).
+        log2_posterior: Normalised posterior in bits; use this for comparisons
+            because it stays finite when the probability underflows.
+        rationale: How the Bayes factor was obtained.
+    """
+
+    hypothesis: str
+    prior: float
+    log2_bayes_factor: float
+    posterior: float
+    log2_posterior: float
+    rationale: str
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable representation."""
+        return {
+            "hypothesis": self.hypothesis,
+            "prior": self.prior,
+            "log2_bayes_factor": self.log2_bayes_factor,
+            "posterior": self.posterior,
+            "log2_posterior": self.log2_posterior,
+            "rationale": self.rationale,
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class Forecast:
     """Scored structural assessment of a public key.
+
+    The score is derived from a combined p-value rather than from a hand-tuned
+    weight, so it is reproducible and reviewable:
+
+    1. every finding and randomness test contributes a p-value under the null
+       hypothesis "this coordinate is a uniformly random 256-bit value";
+    2. correlated measurements are collapsed into evidence families (strongest
+       member wins);
+    3. the surviving p-values are combined with Fisher's method, and a
+       Bonferroni bound is computed as a conservative alternative;
+    4. ``structure_bits = max(0, -log2(max(fisher, bonferroni)) - log2(1/0.01))``
+       is rescaled so that ``2^-64`` saturates the 0..100 scale.
 
     Attributes:
         verdict: Headline verdict.
         size_class: Classification of the key's structural size.
         structure_score: ``0..100``; higher means "less like a random key".
-        total_surprisal_bits: Sum of the strongest surprisal per evidence family,
-            so correlated findings are not double-counted.
-        hypotheses: Ranked generation stories.
+        structure_bits: Independent surprisal above the 1% threshold, in bits.
+        combined_p_value: Fisher combination of the family p-values.
+        bonferroni_p_value: Conservative ``min(1, k * min p)`` bound.
+        minimum_p_value: Smallest family p-value.
+        alpha: Significance level used for labels and findings.
+        total_surprisal_bits: Sum of the family surprisals (before combination).
+        evidence: Per-family contributions, ordered by significance.
+        bayes_factors: Posterior calculation for each generation hypothesis.
+        hypotheses: Ranked generation stories (scores are the posteriors).
         search_estimates: Discrete-logarithm cost table.
         recoverable: Always ``False``; the key cannot be inverted.
         summary: One-paragraph explanation.
@@ -538,7 +624,14 @@ class Forecast:
     verdict: str
     size_class: str
     structure_score: float
+    structure_bits: float
+    combined_p_value: float
+    bonferroni_p_value: float
+    minimum_p_value: float
+    alpha: float
     total_surprisal_bits: float
+    evidence: tuple[EvidenceContribution, ...]
+    bayes_factors: tuple[BayesFactor, ...]
     hypotheses: tuple[ForecastHypothesis, ...]
     search_estimates: tuple[SearchEstimate, ...]
     recoverable: bool
@@ -552,7 +645,14 @@ class Forecast:
             "verdict": self.verdict,
             "size_class": self.size_class,
             "structure_score": self.structure_score,
+            "structure_bits": self.structure_bits,
+            "combined_p_value": self.combined_p_value,
+            "bonferroni_p_value": self.bonferroni_p_value,
+            "minimum_p_value": self.minimum_p_value,
+            "alpha": self.alpha,
             "total_surprisal_bits": self.total_surprisal_bits,
+            "evidence": [item.as_dict() for item in self.evidence],
+            "bayes_factors": [item.as_dict() for item in self.bayes_factors],
             "hypotheses": [item.as_dict() for item in self.hypotheses],
             "search_estimates": [item.as_dict() for item in self.search_estimates],
             "recoverable": self.recoverable,
@@ -668,6 +768,7 @@ class PublicKeyDissection:
         addresses: Address matrix.
         mirror: The other point that shares this x coordinate (``-P``).
         keyspace: Curve-size context (order, space, collision bound).
+        randomness: Statistical randomness battery over the key material.
         findings: Structural findings, ordered by significance.
         forecast: Scored assessment.
         notes: Honesty notes about scope.
@@ -691,6 +792,7 @@ class PublicKeyDissection:
     addresses: tuple[AddressMatrixEntry, ...]
     mirror: MirrorPoint
     keyspace: tuple[tuple[str, str], ...]
+    randomness: RandomnessReport
     findings: tuple[StructureFinding, ...]
     forecast: Forecast
     notes: tuple[str, ...]
@@ -729,6 +831,7 @@ class PublicKeyDissection:
             "address_matrix": [entry.as_dict() for entry in self.addresses],
             "mirror_point": self.mirror.as_dict(),
             "keyspace": dict(self.keyspace),
+            "randomness": self.randomness.as_dict(),
             "findings": [finding.as_dict() for finding in self.findings],
             "forecast": self.forecast.as_dict(),
             "notes": list(self.notes),
@@ -1340,17 +1443,97 @@ def _key_findings(
     return findings
 
 
-_FAMILY_SUFFIXES: Final[tuple[tuple[tuple[str, ...], str], ...]] = (
+#: Finding-code tokens mapped to an evidence family.  A token is matched as a
+#: substring because codes carry a coordinate prefix and a period suffix.  Different families are
+#: treated as independent measurements; members of one family are not.
+_FAMILY_TOKENS: Final[tuple[tuple[tuple[str, ...], str], ...]] = (
     (
         ("small_magnitude", "leading_zero_bits", "trailing_zero_bits", "near_field_prime"),
         "magnitude",
     ),
     (("hamming_weight",), "bit-balance"),
-    (("palindrome", "repeated_period", "known_constant"), "pattern"),
+    (("palindrome", "repeated_period", "known_constant"), "repetition"),
     (("nibble_skew",), "digit-skew"),
     (("ascii_run",), "ascii"),
-    (("x_equals_y", "y_is_negation_of_x"), "relation"),
+    (("x_equals_y", "negation_of_x", "coordinates_equal"), "relation"),
     (("unprefixed_input",), "encoding"),
+)
+
+#: Randomness-test names mapped to an evidence family.  ``monobit`` joins the
+#: Hamming-weight family because it measures the same balance on the joint bits.
+_TEST_FAMILIES: Final[dict[str, str]] = {
+    "monobit": "bit-balance",
+    "runs": "runs",
+    "longest_run": "runs",
+    "serial_correlation": "serial",
+    "approximate_entropy": "sequence",
+    "nibble_uniformity": "digit-skew",
+    "distinct_bytes": "repetition",
+}
+
+_FAMILY_INTERPRETATIONS: Final[dict[str, str]] = {
+    "magnitude": (
+        "Checks whether a coordinate is suspiciously small or sits next to the "
+        "field prime. Probability comes from 2^-k gaps and the binomial model."
+    ),
+    "bit-balance": (
+        "Counts set bits against the Binomial(256, 1/2) and Binomial(512, 1/2) "
+        "null distributions: an exact two-sided tail."
+    ),
+    "runs": (
+        "Examines symbol runs and changes: clustering or alternation that a fair "
+        "coin would rarely produce."
+    ),
+    "serial": ("Lag-1 serial correlation of the key bits, tested with a normal approximation."),
+    "sequence": (
+        "Approximate entropy: whether short bit patterns repeat more or less than chance predicts."
+    ),
+    "digit-skew": ("Chi-square tests on the hexadecimal digit and nibble histograms."),
+    "repetition": (
+        "Palindromes, repeated blocks, magic constants, and the exact distribution "
+        "of distinct byte values."
+    ),
+    "ascii": (
+        "Printable ASCII runs; informational because random bytes occasionally produce them."
+    ),
+    "relation": "Algebraic relations between the coordinates, such as x == y.",
+    "encoding": (
+        "Whether the SEC 1 prefix was supplied; always 1.0 and excluded from the combination."
+    ),
+}
+
+#: Family p-values are floored here (2**-64).  The battery relies on asymptotic
+#: normal approximations, exact tails underflow to zero for degenerate inputs,
+#: and a single 256-bit key cannot carry an arbitrarily large claim.  Flooring
+#: keeps the combination finite and prevents overstated evidence.  The uncapped
+#: test p-values remain available in ``PublicKeyDissection.randomness``.
+_MIN_EVIDENCE_P: Final = 2.0**-64
+#: Smallest p-value reported for a combination.  Doubles cannot represent
+#: anything smaller than about 1e-308, and a chi-square survival function
+#: underflows to zero well before that, so combined values are floored here.
+_MIN_REPORTED_P: Final = 1e-300
+#: Smallest normal double, used to keep ``-log2`` finite if a combination
+#: underflows to zero.
+_MIN_POSITIVE: Final = 2.0**-1022
+#: A 256-bit key cannot supply more than 256 bits of evidence about itself.
+_MAX_STRUCTURE_BITS: Final = 256.0
+
+#: -log2(0.01): evidence below this is treated as noise.
+_NOISE_FLOOR_BITS: Final = 6.643856189774724
+#: Structure bits at which the score saturates: 128 bits of evidence beyond the
+#: noise floor.  A single 256-bit key can supply at most 256 bits about itself,
+#: so 128 leaves room for genuinely extreme cases (a one-bit coordinate, for
+#: example) while keeping the scale informative for ordinary keys.
+_SATURATION_BITS: Final = 128.0
+_SCORE_SCALE: Final = 100.0 / _SATURATION_BITS
+
+#: Priors for the generation hypotheses.  Stated, not hidden, so a reader can
+#: substitute their own and recompute the posterior.
+_HYPOTHESIS_PRIORS: Final[tuple[tuple[str, float], ...]] = (
+    ("Generated by a cryptographically secure RNG", 0.85),
+    ("Weak or low-entropy scalar generator (not detectable from one key)", 0.09),
+    ("Structured, truncated, padded, or hand-made coordinate", 0.05),
+    ("Related-key or incrementing generator (requires a key set)", 0.01),
 )
 
 
@@ -1362,19 +1545,131 @@ def _evidence_family(code: str) -> str:
     skewed digit histogram).  Counting each one separately would multiply the
     evidence, so the score uses the strongest finding per family only.
     """
-    for suffixes, family in _FAMILY_SUFFIXES:
-        if code.endswith(suffixes):
+    for tokens, family in _FAMILY_TOKENS:
+        if any(token in code for token in tokens):
             return family
+    if code.startswith("randomness_"):
+        return _TEST_FAMILIES.get(code.removeprefix("randomness_"), "sequence")
     return code
 
 
-def _effective_surprisal(findings: tuple[StructureFinding, ...]) -> float:
-    """Return the summed surprisal of the strongest finding in each family."""
-    best: dict[str, float] = {}
+def _test_family(name: str) -> str:
+    """Return the evidence family of a randomness test."""
+    return _TEST_FAMILIES.get(name, "sequence")
+
+
+def _collect_evidence(
+    findings: tuple[StructureFinding, ...], randomness: RandomnessReport
+) -> tuple[EvidenceContribution, ...]:
+    """Collapse findings and randomness tests into independent families.
+
+    Each family keeps the smallest p-value seen and records which measurements
+    produced it, which makes the combination step auditable.
+    """
+    p_values: dict[str, float] = {}
+    sources: dict[str, list[str]] = {}
+
+    def record(family: str, p_value: float, source: str) -> None:
+        clamped = min(1.0, max(_MIN_EVIDENCE_P, p_value))
+        if clamped < p_values.get(family, 2.0):
+            p_values[family] = clamped
+        sources.setdefault(family, []).append(source)
+
     for finding in findings:
-        family = _evidence_family(finding.code)
-        best[family] = max(best.get(family, 0.0), finding.surprisal_bits)
-    return sum(best.values())
+        record(_evidence_family(finding.code), finding.probability, finding.code)
+    for test in randomness.tests:
+        record(_test_family(test.name), test.p_value, f"test:{test.name}")
+
+    contributions = [
+        EvidenceContribution(
+            family=family,
+            p_value=value,
+            surprisal_bits=round(min(_MAX_FINDING_SURPRISAL, _surprisal(value)), 3),
+            sources=tuple(dict.fromkeys(sources.get(family, []))),
+            interpretation=_FAMILY_INTERPRETATIONS.get(family, "Statistical evidence."),
+        )
+        for family, value in p_values.items()
+    ]
+    return tuple(sorted(contributions, key=lambda item: (item.p_value, item.family)))
+
+
+def _combine(evidence: tuple[EvidenceContribution, ...]) -> tuple[float, float, float, int]:
+    """Combine family p-values.
+
+    Returns:
+        ``(fisher_p, bonferroni_p, minimum_p, family_count)``.  Families whose
+        p-value is exactly 1.0 (the ``encoding`` family) are excluded because they
+        carry no evidence and would only inflate the degrees of freedom.
+    """
+    usable = [item.p_value for item in evidence if item.p_value < 1.0]
+    if not usable:
+        return 1.0, 1.0, 1.0, 0
+    _, combined, _ = fisher_combine(usable)
+    minimum = min(usable)
+    bonferroni = min(1.0, len(usable) * minimum)
+    return (
+        max(_MIN_REPORTED_P, combined),
+        max(_MIN_REPORTED_P, bonferroni),
+        minimum,
+        len(usable),
+    )
+
+
+def _magnitude_log2_bayes_factor(bits: int) -> float:
+    r"""Log2 Bayes factor for "this coordinate came from a reduced space".
+
+    The alternative model draws a coordinate uniformly from ``[0, 2**m)`` for an
+    unknown ``m`` with a uniform prior over ``m in [0, 255]``, so
+
+    .. math::  P(x | H_1) = 256^{-1} \sum_{m=b}^{255} 2^{-m},
+
+    while the null model assigns ``P(x | H_0) = 2^-256``.  The factor is negative
+    for full-width coordinates (the extra 256 model choices cost eight bits) and
+    grows without bound as the coordinate shrinks.
+    """
+    if not 0 <= bits <= _BITS:
+        raise ValueError("bits must be between 0 and 256")
+    lower = max(bits, 1)
+    # Sum of 2^-m for m in [lower, 255] = 2^-lower * (2 - 2^-(255-lower+1)).
+    log2_sum = -lower + math.log2(2.0 - 2.0 ** (-(256 - lower)))
+    return -8.0 + log2_sum + _BITS
+
+
+def _evidence_log2_bayes_factor(evidence: tuple[EvidenceContribution, ...]) -> float:
+    """Log2 Bayes factor for the "structured coordinate" hypothesis.
+
+    Repetition and digit-skew families are near-certain under a construction
+    process and have probability ``p`` under the null model, so their likelihood
+    ratio is roughly ``0.5 / p``.  Magnitude evidence is handled by
+    :func:`_magnitude_log2_bayes_factor` and is added by the caller.
+    """
+    total = 0.0
+    for item in evidence:
+        if item.family in {"repetition", "digit-skew", "relation", "ascii"} and item.p_value < 1.0:
+            total += math.log2(0.5) - math.log2(item.p_value)
+    return max(-512.0, min(512.0, total))
+
+
+def _posterior_log2(log2_evidence: tuple[float, ...]) -> tuple[float, ...]:
+    r"""Return normalised log2 posterior probabilities.
+
+    Working in log space keeps hypotheses with vanishing probability
+    distinguishable instead of underflowing to zero:
+
+    .. math:: \log_2 P(H_i | D) = \log_2 P(H_i) + \log_2 BF_i
+              - \log_2 \sum_j P(H_j) BF_j
+
+    Raises:
+        ValueError: The number of weights does not match the declared priors.
+    """
+    if len(log2_evidence) != len(_HYPOTHESIS_PRIORS):
+        raise ValueError("one log2 evidence value per hypothesis is required")
+    log_weights = [
+        math.log2(prior) + evidence
+        for (_, prior), evidence in zip(_HYPOTHESIS_PRIORS, log2_evidence, strict=True)
+    ]
+    normaliser = log2_sum_exp(log_weights)
+    return tuple(weight - normaliser for weight in log_weights)
 
 
 def _hypothesis_label(score: float) -> str:
@@ -1459,10 +1754,31 @@ def _search_estimates() -> tuple[SearchEstimate, ...]:
     return tuple(estimates)
 
 
-def _forecast(findings: tuple[StructureFinding, ...], x: int, y: int) -> Forecast:
-    """Score the findings and produce the forecast."""
-    total = min(256.0, _effective_surprisal(findings))
-    score = min(100.0, total * 1.5625)
+def _forecast(
+    findings: tuple[StructureFinding, ...],
+    randomness: RandomnessReport,
+    x: int,
+    y: int,
+) -> Forecast:
+    """Score the evidence and produce a calibrated forecast.
+
+    The score is a monotone function of a combined p-value: findings and tests are
+    collapsed into independent evidence families, the family p-values are
+    combined with Fisher's method, and a Bonferroni bound is computed as a
+    distribution-free cross-check.  The returned hypotheses carry explicit priors
+    and posterior probabilities so the reasoning can be audited or overridden.
+    """
+    evidence = _collect_evidence(findings, randomness)
+    fisher_p, bonferroni_p, minimum_p, family_count = _combine(evidence)
+    combined_p = min(1.0, fisher_p)
+
+    total = min(_MAX_STRUCTURE_BITS, math.fsum(item.surprisal_bits for item in evidence))
+    structure_bits = min(
+        _MAX_STRUCTURE_BITS,
+        max(0.0, -math.log2(max(_MIN_POSITIVE, combined_p)) - _NOISE_FLOOR_BITS),
+    )
+    score = min(100.0, structure_bits * _SCORE_SCALE)
+
     critical = [finding for finding in findings if finding.severity == "critical"]
     magnitude = [
         finding
@@ -1485,52 +1801,100 @@ def _forecast(findings: tuple[StructureFinding, ...], x: int, y: int) -> Forecas
     else:
         size_class = "full 256-bit magnitude"
 
-    random_score = max(0.0, 1.0 - score / 100.0)
-    weak_score = min(1.0, score / 70.0)
-    puzzle_score = min(1.0, (0.15 + 0.85 * score / 100.0) if magnitude else 0.05 + score / 400.0)
-    corrupt_score = (
-        0.2
-        if any(
-            finding.code.endswith(("repeated_period_2", "repeated_period_4", "palindrome"))
-            for finding in findings
-        )
-        else 0.02
+    # --- Bayes factors -----------------------------------------------------
+    magnitude_log2_bf = _magnitude_log2_bayes_factor(x.bit_length())
+    general_log2_bf = _evidence_log2_bayes_factor(evidence) - 8.0
+    structure_log2_bf = max(magnitude_log2_bf, general_log2_bf)
+    # A related-key generator needs a key set; one key carries ~0 bits for it.
+    related_log2_bf = -4.0
+
+    log2_posteriors = _posterior_log2((0.0, general_log2_bf, structure_log2_bf, related_log2_bf))
+    posteriors = tuple(2.0**value for value in log2_posteriors)
+    random_posterior, weak_posterior, structured_posterior, related_posterior = posteriors
+    bayes_factors = (
+        BayesFactor(
+            hypothesis=_HYPOTHESIS_PRIORS[0][0],
+            prior=_HYPOTHESIS_PRIORS[0][1],
+            log2_bayes_factor=0.0,
+            posterior=round(random_posterior, 6),
+            log2_posterior=round(log2_posteriors[0], 3),
+            rationale="Reference model: every coordinate is uniform over [0, 2^256).",
+        ),
+        BayesFactor(
+            hypothesis=_HYPOTHESIS_PRIORS[1][0],
+            prior=_HYPOTHESIS_PRIORS[1][1],
+            log2_bayes_factor=round(general_log2_bf, 3),
+            posterior=round(weak_posterior, 6),
+            log2_posterior=round(log2_posteriors[1], 3),
+            rationale=(
+                "Low-entropy generators still sample most of the 256-bit space, so "
+                "only the repetition and digit-skew evidence counts here; a 2^-8 "
+                "model-complexity penalty is applied, as this report cannot test "
+                "the generator itself."
+            ),
+        ),
+        BayesFactor(
+            hypothesis=_HYPOTHESIS_PRIORS[2][0],
+            prior=_HYPOTHESIS_PRIORS[2][1],
+            log2_bayes_factor=round(structure_log2_bf, 3),
+            posterior=round(structured_posterior, 6),
+            log2_posterior=round(log2_posteriors[2], 3),
+            rationale=(
+                "Reduced-space alternative: coordinate drawn uniformly from [0, 2^m) "
+                "with m unknown and uniform over m in [0, 255], which contributes "
+                "log2(256) - m bits; the general structural evidence is taken as a "
+                "lower bound."
+            ),
+        ),
+        BayesFactor(
+            hypothesis=_HYPOTHESIS_PRIORS[3][0],
+            prior=_HYPOTHESIS_PRIORS[3][1],
+            log2_bayes_factor=related_log2_bf,
+            posterior=round(related_posterior, 6),
+            log2_posterior=round(log2_posteriors[3], 3),
+            rationale=(
+                "Not identifiable from one key: the 2^-4 penalty is the cost of a "
+                "model this report cannot test. Supply several keys to compare."
+            ),
+        ),
     )
 
+    evidence_text = ", ".join(f"{item.family} p={item.p_value:.3g}" for item in evidence)
     hypotheses = (
         ForecastHypothesis(
-            hypothesis="Generated by a cryptographically secure RNG",
-            score=round(random_score, 3),
-            likelihood=_hypothesis_label(random_score),
-            evidence=(f"structure score {score:.1f}/100; {len(critical)} critical finding(s)"),
+            hypothesis=bayes_factors[0].hypothesis,
+            score=round(random_posterior, 4),
+            likelihood=_hypothesis_label(random_posterior),
+            evidence=(
+                f"combined p={combined_p:.3g} over {family_count} independent "
+                f"families; {len(critical)} critical finding(s)"
+            ),
             testable="Compare this key with the export from the original wallet.",
         ),
         ForecastHypothesis(
-            hypothesis="Generated from a low-entropy source (weak RNG, human choice)",
-            score=round(weak_score, 3),
-            likelihood=_hypothesis_label(weak_score),
-            evidence=", ".join(finding.code for finding in findings) or "no structural findings",
+            hypothesis=bayes_factors[1].hypothesis,
+            score=round(weak_posterior, 4),
+            likelihood=_hypothesis_label(weak_posterior),
+            evidence=evidence_text or "no structural findings",
             testable="Re-derive the key with a CSPRNG and compare the generation logs.",
         ),
         ForecastHypothesis(
-            hypothesis="Puzzle, teaching, or vanity key with a deliberately small scalar",
-            score=round(puzzle_score, 3),
-            likelihood=_hypothesis_label(puzzle_score),
+            hypothesis=bayes_factors[2].hypothesis,
+            score=round(structured_posterior, 4),
+            likelihood=_hypothesis_label(structured_posterior),
             evidence=(
-                "coordinates of reduced magnitude"
+                f"x has {x.bit_length()} bits; magnitude log2 BF {magnitude_log2_bf:.1f}"
                 if magnitude
                 else "no reduced-magnitude coordinates"
             ),
             testable="Public puzzles publish their target; this tool cannot confirm it offline.",
         ),
         ForecastHypothesis(
-            hypothesis="Transcription error or truncated/re-encoded copy",
-            score=round(corrupt_score, 3),
-            likelihood=_hypothesis_label(corrupt_score),
-            evidence="repeated blocks or palindromes in a coordinate"
-            if corrupt_score > 0.1
-            else "no repetition or palindrome detected",
-            testable="Compare all 33 or 65 bytes with a second independent export.",
+            hypothesis=bayes_factors[3].hypothesis,
+            score=round(related_posterior, 4),
+            likelihood=_hypothesis_label(related_posterior),
+            evidence="requires a key set; not testable from a single public key",
+            testable="Run the tool on a set of keys and compare the coordinate differences.",
         ),
     )
 
@@ -1560,17 +1924,37 @@ def _forecast(findings: tuple[StructureFinding, ...], x: int, y: int) -> Forecas
     )
 
     limitations = (
-        "Probabilities assume uniformly random 256-bit values; they are not proof "
-        "about how this specific key was generated.",
+        "P-values assume the null hypothesis that each coordinate is a uniformly "
+        "random 256-bit integer; they say nothing definitive about the generator.",
+        "Fisher's method assumes the evidence families are independent. Correlated "
+        "measurements inside a family are already collapsed, but the families are "
+        "not perfectly independent, so the Bonferroni bound is reported next to it.",
+        "The randomness battery is designed for long streams; on 64 bytes its power "
+        "is limited and it can only flag gross anomalies.",
         "Structural analysis cannot confirm or refute that a key corresponds to a "
         "small scalar without solving the discrete logarithm.",
         "No blockchain data is consulted: ownership, balance, and history are unknown.",
     )
 
+    if random_posterior >= max(weak_posterior, structured_posterior, related_posterior):
+        posterior_note = (
+            f"The posterior still favours a secure generator "
+            f"(P={random_posterior:.4g}, "
+            f"{log2_posteriors[0] - max(log2_posteriors[1:]):.1f} bits ahead of the "
+            "best alternative)."
+        )
+    else:
+        best = max(range(len(posteriors)), key=lambda index: log2_posteriors[index])
+        posterior_note = (
+            f"The posterior favours the alternative '{bayes_factors[best].hypothesis}' "
+            f"(P={posteriors[best]:.4g}). A structural explanation now dominates."
+        )
+
     summary = (
-        f"Structure score {score:.1f}/100 from {len(findings)} finding(s) "
-        f"({total:.1f} bits of independent surprisal, strongest per evidence family). "
-        f"{verdict}. "
+        f"Structure score {score:.1f}/100 from {family_count} independent evidence "
+        f"families (Fisher p={combined_p:.3g}, Bonferroni p={bonferroni_p:.3g}, "
+        f"min p={minimum_p:.3g}; {structure_bits:.1f} bits above the 1% threshold, "
+        f"{total:.1f} bits of raw family surprisal). {verdict}. {posterior_note} "
         "This is a statistical reading of the public key, not key recovery."
     )
 
@@ -1578,7 +1962,14 @@ def _forecast(findings: tuple[StructureFinding, ...], x: int, y: int) -> Forecas
         verdict=verdict,
         size_class=size_class,
         structure_score=round(score, 3),
+        structure_bits=round(structure_bits, 3),
+        combined_p_value=_significant(combined_p),
+        bonferroni_p_value=_significant(bonferroni_p),
+        minimum_p_value=_significant(minimum_p),
+        alpha=_ALPHA,
         total_surprisal_bits=round(total, 3),
+        evidence=evidence,
+        bayes_factors=bayes_factors,
         hypotheses=hypotheses,
         search_estimates=_search_estimates(),
         recoverable=False,
@@ -1657,6 +2048,8 @@ def dissect_public_key(
             key=lambda finding: (-finding.surprisal_bits, finding.code),
         )
     )
+    key_bytes = x_bytes + y.to_bytes(32, "big")
+    randomness = randomness_report(bits_from_bytes(key_bytes), data=key_bytes, alpha=_ALPHA)
     addresses = _address_entries(compressed.hex(), uncompressed.hex(), selected_networks)
 
     bit_profiles = (
@@ -1705,8 +2098,9 @@ def dissect_public_key(
         addresses=addresses,
         mirror=_mirror_point(x, y, selected_networks),
         keyspace=_keyspace(),
+        randomness=randomness,
         findings=findings,
-        forecast=_forecast(findings, x, y),
+        forecast=_forecast(findings, randomness, x, y),
         notes=notes,
     )
 

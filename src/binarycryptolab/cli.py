@@ -886,6 +886,52 @@ def _render_forensics_text(result: AnalysisResult) -> str:
     else:
         lines.append("  none: the key looks like a uniformly random 256-bit point")
 
+    randomness = _section(data, "randomness")
+    lines.append("")
+    lines.append("Randomness battery")
+    tests = _entries(randomness, "tests")
+    if tests:
+        lines.append(
+            format_table(
+                ("Test", "Statistic", "p-value", "Result"),
+                [
+                    (
+                        str(test.get("name", "")),
+                        f"{_as_float(test.get('statistic')):.4f}",
+                        f"{_as_float(test.get('p_value')):.3e}",
+                        "pass" if test.get("passed") else "FAIL",
+                    )
+                    for test in tests
+                ],
+            )
+        )
+        lines.append(
+            f"  Fisher p={_as_float(randomness.get('fisher_p_value')):.3e}; "
+            f"Bonferroni p={_as_float(randomness.get('bonferroni_p_value')):.3e}; "
+            f"family-wise {'pass' if randomness.get('familywise_pass') else 'FAIL'}"
+        )
+    else:
+        lines.append("  none: the key material was too short for the battery")
+
+    evidence = _entries(forecast, "evidence")
+    if evidence:
+        lines.append("")
+        lines.append("  Evidence families (independent, strongest per family)")
+        lines.append(
+            format_table(
+                ("Family", "p-value", "Bits", "Sources"),
+                [
+                    (
+                        str(item.get("family", "")),
+                        f"{_as_float(item.get('p_value')):.3e}",
+                        f"{_as_float(item.get('surprisal_bits')):.1f}",
+                        abbreviate(", ".join(_as_text_list(item.get("sources"))), 46),
+                    )
+                    for item in evidence
+                ],
+            )
+        )
+
     lines.append("")
     lines.append("Forecast")
     lines.append(f"  Verdict         : {forecast.get('verdict', '')}")
@@ -893,24 +939,32 @@ def _render_forensics_text(result: AnalysisResult) -> str:
     score = _as_float(forecast.get("structure_score"))
     surprisal = _as_float(forecast.get("total_surprisal_bits"))
     lines.append(f"  Structure score : {score:.1f}/100")
-    lines.append(f"  Surprisal       : {surprisal:.1f} bits")
+    lines.append(
+        f"  Structure bits  : {_as_float(forecast.get('structure_bits')):.1f} (above the noise floor)"
+    )
+    lines.append(f"  Surprisal       : {surprisal:.1f} bits (raw, before combination)")
+    lines.append(f"  Fisher p        : {_as_float(forecast.get('combined_p_value')):.3e}")
+    lines.append(f"  Bonferroni p    : {_as_float(forecast.get('bonferroni_p_value')):.3e}")
     lines.append(f"  Recoverable     : {'yes' if forecast.get('recoverable') else 'no'}")
     lines.append("")
-    lines.append("  Hypotheses")
+    lines.append("  Hypotheses (prior -> posterior via Bayes' rule)")
     hypotheses = _entries(forecast, "hypotheses")
+    factors = _entries(forecast, "bayes_factors")
     if hypotheses:
-        lines.append(
-            format_table(
-                ("Likelihood", "Score", "Hypothesis"),
-                [
-                    (
-                        str(item.get("likelihood", "")),
-                        f"{_as_float(item.get('score')):.2f}",
-                        str(item.get("hypothesis", "")),
-                    )
-                    for item in hypotheses
-                ],
+        rows: list[tuple[str, str, str, str, str]] = []
+        for index, item in enumerate(hypotheses):
+            factor = factors[index] if index < len(factors) else {}
+            rows.append(
+                (
+                    str(item.get("likelihood", "")),
+                    f"{_as_float(factor.get('prior')):.2f}",
+                    f"{_as_float(item.get('score')):.4f}",
+                    f"{_as_float(factor.get('log2_bayes_factor')):+.1f}",
+                    str(item.get("hypothesis", "")),
+                )
             )
+        lines.append(
+            format_table(("Likelihood", "Prior", "Posterior", "log2 BF", "Hypothesis"), rows)
         )
     estimates = _entries(forecast, "search_estimates")
     if estimates:

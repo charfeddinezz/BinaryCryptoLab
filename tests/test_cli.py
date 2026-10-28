@@ -521,6 +521,17 @@ class TestDissectPublicKeyCommand:
         assert "consistent with a uniformly random public key" in out
         assert "Recoverable     : no" in out
 
+    def test_text_report_includes_the_statistics(self, cli_runner: CliRunner) -> None:
+        code, out, _ = cli_runner(["dissect-public-key", "--public-key", PUBKEY_ONE_COMPRESSED])
+        assert code == 0
+        assert "Randomness battery" in out
+        assert "Evidence families" in out
+        assert "Fisher p" in out
+        assert "Bonferroni p" in out
+        assert "monobit" in out
+        assert "Log2 BF" not in out
+        assert "log2 BF" in out
+
     def test_reports_the_known_addresses(self, cli_runner: CliRunner) -> None:
         code, out, _ = cli_runner(["dissect-public-key", "--public-key", PUBKEY_ONE_COMPRESSED])
         assert code == 0

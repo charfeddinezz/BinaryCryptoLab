@@ -56,13 +56,15 @@ Dependencies point downwards only. `bitcoin` may use `ecc`, `hashing`,
 | `bit_operations.py` | Bit counting, masks, shifts, masks, ranges, comparisons, Hamming distance. |
 | `byte_operations.py` | Byte conversion, XOR, Hamming distance, chunking, slicing, endianness. |
 | `statistics.py` | Bit statistics, byte histograms, Shannon entropy. |
+| `special_functions.py` | Dependency-free normal, gamma, chi-square, binomial, Fisher, and log-sum-exp numerics. |
+| `randomness.py` | Seven-test randomness battery (NIST/Knuth style) with exact tails and multiple-testing summaries. |
 | `analysis.py` | Engines that turn validated input into `BinaryAnalysis` / `HexAnalysis` / `AnalysisResult`. |
 | `hashing.py` | SHA-256, SHA-512, double SHA-256, RIPEMD-160, HASH160, algorithm registry. |
 | `ecc.py` | secp256k1 domain parameters, scalar validation, public-key derivation/parsing via `cryptography`. |
 | `base58.py` | Base58 and Base58Check encode/decode with constant-time checksum comparison. |
 | `bech32.py` | Bech32/Bech32m checksums and BIP-173/BIP-350 SegWit address encoding. |
 | `bitcoin.py` | Network parameters, P2PKH/P2WPKH/P2SH-P2WPKH derivation, the address matrix, and decoding/validation. |
-| `forensics.py` | Deep public-key dissection, structural findings with probabilities, and the scored forecast. |
+| `forensics.py` | Deep public-key dissection, structural findings with probabilities, evidence combination, Bayes factors, and the scored forecast. |
 | `models/analysis_result.py` | Frozen dataclasses shared by the analysis engines, reports, CLI, and GUI. |
 | `reports/` | Deterministic JSON and long-format CSV rendering plus atomic file writes. |
 | `utils/` | Terminal-safe formatting helpers and stderr logging configuration. |
@@ -90,16 +92,22 @@ and never below them: it composes their public results into one immutable
 `PublicKeyDissection`. Nothing in the encodings modules imports it, so the
 dependency graph stays acyclic.
 
-The forecasting layer is deliberately statistical. It computes, per finding, the
-probability that a uniformly random 256-bit value would show the same pattern,
-converts that to surprisal bits, groups correlated findings into evidence
-families, and maps the total to a 0–100 score. No search over scalars exists
-anywhere in the package, and the `recoverable` flag is a hard-coded `False` that
-tests assert.
+The forecasting layer is deliberately statistical. It computes, per finding and
+per randomness test, the probability that uniformly random key material would
+show the same pattern, groups correlated measurements into evidence families,
+combines the surviving p-values with Fisher's method, reports a Bonferroni bound
+as a cross-check, and maps the result to a 0–100 score. The same evidence is
+turned into posterior probabilities through explicit priors and analytic Bayes
+factors. No search over scalars exists anywhere in the package, and the
+`recoverable` flag is a hard-coded `False` that tests assert.
 
 Every probability has a closed form (`2^-k`, an exact binomial tail computed with
-integer combinatorics, or a documented approximation), which makes the scores
-reproducible and reviewable rather than opaque.
+integer combinatorics, an exact occupancy distribution, or a documented
+approximation), which makes the scores reproducible and reviewable rather than
+opaque. `special_functions.py` supplies the required special functions
+(regularized incomplete gamma, normal tails, Fisher combination) without adding a
+SciPy dependency, so the report can be recomputed from the standard library
+alone.
 
 ## Design decisions
 

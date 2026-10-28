@@ -4,6 +4,64 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-10-28
+
+### Added
+
+* **`binarycryptolab.special_functions`** — dependency-free numerics for the
+  statistical layer: normal CDF/survival/two-sided p-values, regularized
+  incomplete gamma (series and continued fraction) and its chi-square
+  specialisation, exact binomial mass and two-sided tails, Fisher combination,
+  and overflow-safe `log2_sum_exp`. Verified against published critical values
+  (χ² at 1, 2, 3, 4, 10, and 30 degrees of freedom).
+* **`binarycryptolab.randomness`** — a seven-test battery over key material:
+  monobit, runs, longest run (exact dynamic program, no lookup tables), lag-1
+  serial correlation, approximate entropy, nibble uniformity, and distinct-byte
+  occupancy (exact Stirling-number distribution, normal approximation with exact
+  moments above 256 bytes). `randomness_report` adds Fisher and Bonferroni
+  combinations, the minimum p-value, a family-wise verdict, plug-in and
+  Miller–Madow entropy, and explicit caveats.
+* `PublicKeyDissection.randomness` runs the battery over `x ‖ y` and is included
+  in the JSON report; the text report, GUI, and example print it.
+* `Forecast` now exposes `structure_bits`, `combined_p_value`,
+  `bonferroni_p_value`, `minimum_p_value`, `alpha`, and per-family
+  `EvidenceContribution` records (`evidence`), plus `BayesFactor` records
+  (`bayes_factors`) with priors, log2 Bayes factors, posteriors, and log2
+  posteriors.
+* `bits_from_bytes`, `distinct_bytes_moments`, `distinct_bytes_p_value`,
+  `P_VALUE_FLOOR`, and the `RandomnessReport`/`StatisticalTest` models are part
+  of the public API.
+
+### Changed
+
+* The structure score is now derived from a combined p-value instead of a
+  hand-tuned scale: family p-values are floored at `2^-64`, combined with
+  Fisher's method, and mapped as
+  `score = min(100, max(0, -log₂ p - log₂ 100) / 128 × 100)`. The Bonferroni
+  bound (`k · min p`) is reported next to it, and both are printed in the text
+  report and the GUI.
+* Generation hypotheses are now Bayesian. Priors are explicit (0.85 / 0.09 /
+  0.05 / 0.01), the "structured coordinate" model uses an analytic reduced-space
+  Bayes factor (`2^256 · 256⁻¹ Σ 2^-m`), and `hypothesis.score` is the posterior
+  probability rather than a heuristic. Hypothesis labels follow the posterior.
+* Evidence families were renamed and extended (`repetition`, `runs`, `serial`,
+  `sequence`), and randomness tests now feed the same de-duplication as findings,
+  so correlated measurements cannot multiply the evidence.
+* Combined p-values are rounded to significant figures (not decimal places) and
+  floored at `1e-300`, so tiny probabilities survive JSON serialisation.
+
+### Fixed
+
+* The battery no longer raises on degenerate input: a constant bit string yields
+  a failing `serial_correlation` placeholder instead of a `0/0` error.
+* `distinct_bytes_exact_p` documents and enforces its exact-DP size limit and
+  points to `distinct_bytes_p_value` for longer inputs.
+
+### Tests
+
+* 126 new tests (862 total): 49 for the special functions, 51 for the battery,
+  26 for the statistical forecast, plus CLI coverage for the new report sections.
+
 ## [1.1.0] - 2026-10-27
 
 ### Added

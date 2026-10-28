@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -34,11 +35,15 @@ from binarycryptolab.forensics import (
     DEPTH_LEVELS,
     PublicKeyDissection,
     _binomial_two_sided_p,
+    _evidence_family,
     _human_duration,
     _is_palindrome,
     _limbs,
+    _magnitude_log2_bayes_factor,
+    _posterior_log2,
     _printable_runs,
     _repeated_period,
+    _test_family,
     address_type_names,
     dissect_many,
     dissect_public_key,
@@ -464,7 +469,10 @@ class TestForecast:
 
     def test_recommendations_and_limitations(self, dissection: PublicKeyDissection) -> None:
         assert len(dissection.forecast.recommendations) >= 3
-        assert len(dissection.forecast.limitations) == 3
+        limitations = dissection.forecast.limitations
+        assert len(limitations) == 5
+        assert any("Bonferroni" in item for item in limitations)
+        assert any("cannot confirm or refute" in item for item in limitations)
         assert any(
             "does not compute private keys" in item for item in dissection.forecast.recommendations
         )
@@ -472,6 +480,189 @@ class TestForecast:
     def test_summary_mentions_the_score(self, dissection: PublicKeyDissection) -> None:
         assert "Structure score" in dissection.forecast.summary
         assert "not key recovery" in dissection.forecast.summary
+
+
+# ---------------------------------------------------------------------------
+# Statistical forecast
+# ---------------------------------------------------------------------------
+
+
+class TestEvidenceFamilies:
+    """Findings and randomness tests mapped onto independent evidence families."""
+
+    def test_findings_map_to_documented_families(self) -> None:
+        assert _evidence_family("x_small_magnitude") == "magnitude"
+        assert _evidence_family("y_leading_zero_bits") == "magnitude"
+        assert _evidence_family("x_hamming_weight") == "bit-balance"
+        assert _evidence_family("x_palindrome") == "repetition"
+        assert _evidence_family("x_repeated_period_4") == "repetition"
+        assert _evidence_family("x_nibble_skew") == "digit-skew"
+        assert _evidence_family("x_ascii_run") == "ascii"
+        assert _evidence_family("x_equals_y") == "relation"
+        assert _evidence_family("y_is_negation_of_x") == "relation"
+
+    def test_randomness_tests_map_to_families(self) -> None:
+        assert _test_family("monobit") == "bit-balance"
+        assert _test_family("runs") == "runs"
+        assert _test_family("longest_run") == "runs"
+        assert _test_family("serial_correlation") == "serial"
+        assert _test_family("approximate_entropy") == "sequence"
+        assert _test_family("nibble_uniformity") == "digit-skew"
+        assert _test_family("distinct_bytes") == "repetition"
+
+    def test_unknown_test_falls_back_to_sequence(self) -> None:
+        assert _test_family("not-a-test") == "sequence"
+
+    def test_families_are_unique_in_the_report(self, dissection: PublicKeyDissection) -> None:
+        names = [item.family for item in dissection.forecast.evidence]
+        assert len(names) == len(set(names))
+        assert names
+
+    def test_every_family_cites_its_sources(self, dissection: PublicKeyDissection) -> None:
+        for item in dissection.forecast.evidence:
+            assert item.sources
+            assert item.interpretation
+            assert 0.0 < item.p_value <= 1.0
+
+
+class TestBayesFactors:
+    """Explicit priors, log-space posteriors, and model complexity penalties."""
+
+    def test_priors_sum_to_one(self, dissection: PublicKeyDissection) -> None:
+        priors = [item.prior for item in dissection.forecast.bayes_factors]
+        assert sum(priors) == pytest.approx(1.0)
+
+    def test_posteriors_sum_to_one(self, dissection: PublicKeyDissection) -> None:
+        posteriors = [item.posterior for item in dissection.forecast.bayes_factors]
+        assert sum(posteriors) == pytest.approx(1.0, abs=1e-6)
+
+    def test_log_posteriors_are_normalised(self, dissection: PublicKeyDissection) -> None:
+        logs = [item.log2_posterior for item in dissection.forecast.bayes_factors]
+        total = sum(2.0**value for value in logs)
+        assert total == pytest.approx(1.0, abs=1e-3)
+
+    def test_log_posterior_agrees_with_posterior(self, dissection: PublicKeyDissection) -> None:
+        for item in dissection.forecast.bayes_factors:
+            assert math.log2(item.posterior) == pytest.approx(item.log2_posterior, abs=0.01)
+
+    def test_hypothesis_scores_are_the_posteriors(self, dissection: PublicKeyDissection) -> None:
+        forecast = dissection.forecast
+        for hypothesis, factor in zip(forecast.hypotheses, forecast.bayes_factors, strict=True):
+            assert hypothesis.score == pytest.approx(factor.posterior, abs=1e-3)
+
+    def test_normal_key_favours_a_secure_generator(self, dissection: PublicKeyDissection) -> None:
+        factors = dissection.forecast.bayes_factors
+        assert factors[0].posterior > 0.9
+        assert all(factor.posterior < 0.05 for factor in factors[1:])
+
+    def test_weak_key_favours_a_structure(self, weak_dissection: PublicKeyDissection) -> None:
+        factors = weak_dissection.forecast.bayes_factors
+        best = max(factors, key=lambda factor: factor.log2_posterior)
+        assert best is factors[2]
+        assert best.posterior > 0.9
+        assert 0.0 <= factors[0].posterior < 1e-6
+
+    def test_magnitude_bayes_factor_is_monotone(self) -> None:
+        values = [_magnitude_log2_bayes_factor(bits) for bits in (1, 16, 64, 128, 255, 256)]
+        assert values == sorted(values, reverse=True)
+        # A full-width coordinate is penalised by the 8 bits of model choice.
+        assert _magnitude_log2_bayes_factor(256) < 0.0
+        assert _magnitude_log2_bayes_factor(1) > 200.0
+
+    def test_posterior_requires_one_weight_per_hypothesis(self) -> None:
+        with pytest.raises(ValueError):
+            _posterior_log2((0.0, 0.0))
+
+    def test_posterior_is_shift_invariant(self) -> None:
+        base = _posterior_log2((0.0, 0.0, 0.0, 0.0))
+        shifted = _posterior_log2((5.0, 5.0, 5.0, 5.0))
+        assert base == pytest.approx(shifted)
+
+
+class TestStatisticalForecast:
+    """Combined p-values, entropy budgets, and the randomness section."""
+
+    def test_fisher_combination_is_reported(self, dissection: PublicKeyDissection) -> None:
+        forecast = dissection.forecast
+        assert 0.0 < forecast.combined_p_value <= 1.0
+        assert 0.0 < forecast.bonferroni_p_value <= 1.0
+        assert forecast.bonferroni_p_value >= forecast.minimum_p_value
+        assert forecast.minimum_p_value <= min(item.p_value for item in forecast.evidence)
+
+    def test_alpha_is_the_documented_level(self, dissection: PublicKeyDissection) -> None:
+        assert dissection.forecast.alpha == pytest.approx(0.01)
+
+    def test_structure_bits_are_bounded(self, weak_dissection: PublicKeyDissection) -> None:
+        forecast = weak_dissection.forecast
+        assert 0.0 <= forecast.structure_bits <= 256.0
+        assert forecast.total_surprisal_bits <= 256.0
+        assert forecast.structure_score == 100.0
+
+    def test_score_follows_the_structure_bits(self, dissection: PublicKeyDissection) -> None:
+        forecast = dissection.forecast
+        expected = min(100.0, forecast.structure_bits * 100.0 / 128.0)
+        assert forecast.structure_score == pytest.approx(expected, abs=1e-3)
+
+    def test_structured_key_summary_reports_the_alternative(
+        self, weak_dissection: PublicKeyDissection
+    ) -> None:
+        summary = weak_dissection.forecast.summary
+        assert "Fisher p=" in summary
+        assert "Bonferroni p=" in summary
+        assert "posterior favours the alternative" in summary
+
+    def test_randomness_section_is_populated(self, dissection: PublicKeyDissection) -> None:
+        report = dissection.randomness
+        assert len(report.tests) == 7
+        assert report.bits_used == 512
+        assert 0.0 < report.fisher_p_value <= 1.0
+        assert 0.0 < report.bonferroni_p_value <= 1.0
+        assert 0.0 < report.bit_entropy_corrected <= 1.0
+
+    def test_normal_key_passes_the_battery(self, dissection: PublicKeyDissection) -> None:
+        assert dissection.randomness.familywise_pass
+        assert dissection.randomness.failed_tests == ()
+
+    def test_weak_key_fails_the_battery(self, weak_dissection: PublicKeyDissection) -> None:
+        assert not weak_dissection.randomness.familywise_pass
+        assert "monobit" in weak_dissection.randomness.failed_tests
+
+    def test_randomness_is_serialised(self, dissection: PublicKeyDissection) -> None:
+        payload = dissection.as_dict()["randomness"]
+        assert set(payload) == {
+            "bits_used",
+            "alpha",
+            "tests",
+            "fisher_p_value",
+            "bonferroni_p_value",
+            "minimum_p_value",
+            "familywise_pass",
+            "failed_tests",
+            "bit_entropy",
+            "bit_entropy_corrected",
+            "notes",
+        }
+        assert len(payload["tests"]) == 7
+
+    def test_evidence_and_factors_are_serialised(self, dissection: PublicKeyDissection) -> None:
+        payload = dissection.as_dict()["forecast"]
+        assert payload["evidence"]
+        assert set(payload["evidence"][0]) == {
+            "family",
+            "p_value",
+            "surprisal_bits",
+            "sources",
+            "interpretation",
+        }
+        assert set(payload["bayes_factors"][0]) == {
+            "hypothesis",
+            "prior",
+            "log2_bayes_factor",
+            "posterior",
+            "log2_posterior",
+            "rationale",
+        }
+        assert payload["recoverable"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -622,6 +813,7 @@ class TestSerialization:
             "address_matrix",
             "mirror_point",
             "keyspace",
+            "randomness",
             "findings",
             "forecast",
             "notes",

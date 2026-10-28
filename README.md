@@ -60,10 +60,14 @@ never stores private keys, and never attempts to recover anyone's key.
 - Structural findings with computed probabilities (leading/trailing zeros,
   reduced magnitude, Hamming-weight binomial tails, palindromes, repeated blocks,
   magic constants, digit skew, printable runs, coordinate relations).
-- A scored forecast: verdict, structure score, four ranked generation
-  hypotheses, and the discrete-logarithm cost of exhaustive, Pollard-rho, and
-  baby-step/giant-step search — with an explicit, permanent statement that no key
-  recovery is implemented or possible.
+- A seven-test randomness battery (monobit, runs, longest run, serial
+  correlation, approximate entropy, nibble uniformity, distinct bytes) with
+  exact tails, Fisher combination, and a Bonferroni bound.
+- A scored forecast computed statistically: evidence families, Fisher/Bonferroni
+  combined p-values, analytic Bayes factors with printed priors, posterior
+  probabilities for four generation hypotheses, and the discrete-logarithm cost of
+  exhaustive, Pollard-rho, and baby-step/giant-step search — with an explicit,
+  permanent statement that no key recovery is implemented or possible.
 - Batch mode: dissect up to 1000 keys from a file and export text, JSON, or CSV.
 
 ### Interfaces and reports
@@ -72,7 +76,7 @@ never stores private keys, and never attempts to recover anyone's key.
   exit codes, and private-key warnings.
 - Deterministic JSON and CSV reports, atomic writes, overwrite protection.
 - Optional Streamlit interface with JSON/CSV downloads and no network access.
-- 500+ tests: unit, property-based (Hypothesis), integration, CLI, and GUI.
+- 860+ tests: unit, property-based (Hypothesis), integration, CLI, and GUI.
 
 ## Requirements
 
@@ -355,14 +359,25 @@ Curve verification: all 10 checks passed
 Structural findings (0)
   none: the key looks like a uniformly random 256-bit point
 
+Randomness battery
+Test                 Statistic  p-value    Result
+-------------------  ---------  ---------  ------
+monobit              0.1768     8.597e-01  pass
+runs                 0.1865     8.520e-01  pass
+...                              (7 tests)
+
 Forecast
   Verdict         : consistent with a uniformly random public key
   Size class      : full 256-bit magnitude
   Structure score : 0.0/100
+  Structure bits  : 0.0 (above the noise floor)
+  Fisher p        : 9.517e-01
+  Bonferroni p    : 1.000e+00
   Recoverable     : no
 ```
 
-The full report adds four ranked hypotheses, a discrete-logarithm cost table, the
+The full report adds per-family evidence, four Bayesian hypotheses with priors and
+posteriors, a discrete-logarithm cost table, the
 16-row address matrix (P2PKH compressed/uncompressed, P2WPKH, P2SH-P2WPKH across
 four networks) with locking scripts, digests, every textual representation, and
 bit/byte profiles.
@@ -432,9 +447,7 @@ assert sha256(b"abc").hex().startswith("ba7816bf")
 assert len(hash160(b"\x02")) == 20
 
 info = public_key_from_private(1)  # synthetic test scalar only
-assert info.compressed_hex == (
-    "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
-)
+assert info.compressed_hex == ("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
 
 address = address_from_public_key(info.compressed_hex, address_type="p2wpkh")
 assert address.address == "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"

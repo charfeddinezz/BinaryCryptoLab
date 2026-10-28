@@ -74,16 +74,59 @@ def main() -> int:
     else:
         print("  none: this looks like a uniformly random 256-bit point")
 
+    report = dissection.randomness
+    print("\nRandomness battery (x || y, 512 bits)")
+    print(
+        format_table(
+            ("Test", "Statistic", "p-value", "Result"),
+            [
+                (
+                    test.name,
+                    f"{test.statistic:.4f}",
+                    f"{test.p_value:.3e}",
+                    "pass" if test.passed else "FAIL",
+                )
+                for test in report.tests
+            ],
+        )
+    )
+    print(
+        f"  Fisher p = {report.fisher_p_value:.3e}; "
+        f"Bonferroni p = {report.bonferroni_p_value:.3e}; "
+        f"family-wise {'pass' if report.familywise_pass else 'FAIL'}"
+    )
+
     forecast = dissection.forecast
     print("\nForecast")
     print(f"  verdict         : {forecast.verdict}")
     print(f"  size class      : {forecast.size_class}")
     print(f"  structure score : {forecast.structure_score:.1f}/100")
-    print(f"  surprisal       : {forecast.total_surprisal_bits:.1f} bits")
+    print(f"  structure bits  : {forecast.structure_bits:.1f} above the noise floor")
+    print(f"  Fisher p        : {forecast.combined_p_value:.3e}")
+    print(f"  Bonferroni p    : {forecast.bonferroni_p_value:.3e}")
     print(f"  recoverable     : {forecast.recoverable}")
-    print("\n  Hypotheses")
-    for item in forecast.hypotheses:
-        print(f"    {item.likelihood:<13} {item.score:.2f}  {item.hypothesis}")
+    print("\n  Evidence families")
+    print(
+        format_table(
+            ("Family", "p-value", "Bits", "Sources"),
+            [
+                (
+                    item.family,
+                    f"{item.p_value:.3e}",
+                    f"{item.surprisal_bits:.1f}",
+                    abbreviate(", ".join(item.sources), 40),
+                )
+                for item in forecast.evidence
+            ],
+        )
+    )
+    print("\n  Hypotheses (prior -> posterior, Bayes' rule)")
+    for item, factor in zip(forecast.hypotheses, forecast.bayes_factors, strict=True):
+        print(
+            f"    {item.likelihood:<13} prior {factor.prior:.2f} -> "
+            f"posterior {item.score:.4f}  (log2 BF {factor.log2_bayes_factor:+.1f})  "
+            f"{item.hypothesis}"
+        )
 
     print("\n  Search cost (not implemented; shown for scale)")
     print(

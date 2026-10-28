@@ -393,6 +393,9 @@ Forecast
   Verdict         : consistent with a uniformly random public key
   Size class      : full 256-bit magnitude
   Structure score : 0.0/100
+  Structure bits  : 0.0 (above the noise floor)
+  Fisher p        : 9.517e-01
+  Bonferroni p    : 1.000e+00
   Recoverable     : no
 ```
 
@@ -421,8 +424,31 @@ with an `index` field per key.
 
 The score is a statistical reading of the key's structure, not key recovery. See
 [`public_key_forensics.md`](public_key_forensics.md) for the exact formulas, the
-evidence-family de-duplication, and the hypothesis weights. `recoverable` is
-always `false`: BinaryCryptoLab does not attack the discrete logarithm.
+evidence families, the Fisher/Bonferroni combination, the Bayes factors, and the
+hypothesis priors. `recoverable` is always `false`: BinaryCryptoLab does not
+attack the discrete logarithm.
+
+The `Randomness battery` section runs seven tests over `x ‖ y` and reports each
+p-value, the Fisher combination, a Bonferroni bound, and the family-wise verdict.
+The `Evidence families` table shows which measurements survived de-duplication,
+and the hypotheses table prints each prior, log2 Bayes factor, and posterior.
+
+You can run the battery and the special functions directly:
+
+```python
+from binarycryptolab.randomness import bits_from_bytes, randomness_report
+from binarycryptolab.special_functions import chi_square_sf, fisher_combine
+
+key_bytes = bytes.fromhex(
+    "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+    "483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8"
+)
+report = randomness_report(bits_from_bytes(key_bytes), data=key_bytes)
+print(report.familywise_pass, f"{report.fisher_p_value:.3f}")  # True 0.978
+
+print(chi_square_sf(1, 3.841458820694124))  # 0.05
+print(fisher_combine([0.5, 0.5])[1])  # 0.5966...
+```
 
 ### Python API
 
@@ -433,9 +459,9 @@ dissection = dissect_public_key(
     "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
     depth="deep",
 )
-print(dissection.forecast.structure_score)   # 0.0
-print(dissection.x.leading_zero_bits)        # 1
-print(dissection.addresses[0].address)       # 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH
+print(dissection.forecast.structure_score)  # 0.0
+print(dissection.x.leading_zero_bits)  # 1
+print(dissection.addresses[0].address)  # 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH
 print(dissection.as_dict()["forecast"]["recoverable"])  # False
 ```
 
@@ -484,12 +510,12 @@ interrupted write cannot leave a truncated report.
 from binarycryptolab import analyze_binary, analyze_hex, hash160, sha256
 
 result = analyze_binary("101101")
-print(result.integer_value)              # 45
-print(result.hexadecimal)                # 2d
-print(result.bit_stats.hamming_weight)   # 4
+print(result.integer_value)  # 45
+print(result.hexadecimal)  # 2d
+print(result.bit_stats.hamming_weight)  # 4
 
 hex_result = analyze_hex("2d")
-print(hex_result.binary)                 # 00101101
+print(hex_result.binary)  # 00101101
 
 print(sha256(b"abc").hex())
 print(hash160(b"\x02").hex())
@@ -501,12 +527,12 @@ Bit and byte operations are explicit about widths and byte order:
 from binarycryptolab.bit_operations import bitwise_not, extract_bit_range
 from binarycryptolab.byte_operations import int_to_bytes, bytes_to_int
 
-print(bin(bitwise_not(0b1010, width=4)))   # 0b101
+print(bin(bitwise_not(0b1010, width=4)))  # 0b101
 print(bin(extract_bit_range(0b101101, 1, 5)))  # 0b110
 
 data = int_to_bytes(258, length=2, byteorder="big")
-print(data.hex())                            # 0102
-print(bytes_to_int(data, byteorder="big"))   # 258
+print(data.hex())  # 0102
+print(bytes_to_int(data, byteorder="big"))  # 258
 ```
 
 Public keys and addresses:
@@ -515,11 +541,11 @@ Public keys and addresses:
 from binarycryptolab.bitcoin import address_from_public_key, decode_address
 from binarycryptolab.ecc import public_key_from_private
 
-info = public_key_from_private(1)   # synthetic test scalar
+info = public_key_from_private(1)  # synthetic test scalar
 print(info.compressed_hex)
 
 address = address_from_public_key(info.compressed_hex, address_type="p2wpkh")
-print(address.address)              # bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4
+print(address.address)  # bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4
 
 print(decode_address(address.address).payload_hex)
 ```
@@ -539,8 +565,8 @@ Hashing text with a defined encoding and converting hexadecimal text explicitly:
 ```python
 from binarycryptolab.hex_utils import hex_to_text, text_to_hex
 
-print(hex_to_text("48656c6c6f"))      # Hello
-print(text_to_hex("Hello"))           # 48656c6c6f
+print(hex_to_text("48656c6c6f"))  # Hello
+print(text_to_hex("Hello"))  # 48656c6c6f
 ```
 
 ## Graphical interface

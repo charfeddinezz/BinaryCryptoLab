@@ -269,6 +269,11 @@ def _forensics_tab() -> None:
     second.metric("Surprisal", f"{forecast['total_surprisal_bits']:.1f} bits")
     third.metric("Findings", str(len(payload["findings"])))
     fourth.metric("Recoverable", "no")
+    st.caption(
+        f"Fisher p = {forecast['combined_p_value']:.3e} | "
+        f"Bonferroni p = {forecast['bonferroni_p_value']:.3e} | "
+        f"structure bits = {forecast['structure_bits']:.1f}"
+    )
 
     verdict = str(forecast["verdict"])
     if forecast["structure_score"] >= 25:
@@ -315,6 +320,50 @@ def _forensics_tab() -> None:
         width="stretch",
         hide_index=True,
     )
+
+    evidence = forecast.get("evidence", [])
+    if evidence:
+        st.markdown("**Evidence families** (independent measurements, strongest per family)")
+        st.dataframe(
+            [
+                {
+                    "family": item["family"],
+                    "p_value": f"{item['p_value']:.3e}",
+                    "surprisal_bits": round(item["surprisal_bits"], 2),
+                    "sources": ", ".join(item["sources"]),
+                    "interpretation": item["interpretation"],
+                }
+                for item in evidence
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+    randomness = payload.get("randomness", {})
+    tests = randomness.get("tests", [])
+    if tests:
+        st.markdown("**Randomness battery**")
+        st.dataframe(
+            [
+                {
+                    "test": test["name"],
+                    "statistic": round(test["statistic"], 4),
+                    "p_value": f"{test['p_value']:.3e}",
+                    "result": "pass" if test["passed"] else "FAIL",
+                    "detail": test["detail"],
+                }
+                for test in tests
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+        st.caption(
+            f"Fisher p = {randomness['fisher_p_value']:.3e} | "
+            f"Bonferroni p = {randomness['bonferroni_p_value']:.3e} | "
+            f"family-wise {'pass' if randomness['familywise_pass'] else 'FAIL'}"
+        )
+        for note in randomness.get("notes", []):
+            st.caption(note)
 
     st.markdown("**Coordinates**")
     st.dataframe(
