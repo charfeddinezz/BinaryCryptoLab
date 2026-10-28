@@ -56,6 +56,15 @@ from .forensics import (
 )
 from .hashing import HashAlgorithm, hash_bytes
 from .hex_utils import hex_to_bytes
+from .key_reconstruction import (
+    HEX_DIGITS,
+    MAX_UNKNOWN_BITS,
+    ComparisonReport,
+    TemplateSolution,
+    compare_keys,
+    parse_template,
+    solve_template,
+)
 from .models.analysis_result import REDACTED, AnalysisResult
 from .reports import render_csv, render_json, write_csv, write_json
 from .reports._io import atomic_write_text, resolve_target
@@ -312,6 +321,78 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_report_options(dissect, flag="--report-format")
     dissect.set_defaults(handler=_cmd_dissect_public_key)
+
+    assembler = subparsers.add_parser(
+        "assemble-private-key",
+        help="assemble a scalar from known hex digits plus a bounded search",
+        description=(
+            "Reduce everything known about a scalar to one scale of bits, then search "
+            "the unknown hex window (at most 40 bits) and assemble the full 64-digit "
+            "scalar. Every candidate is verified by re-deriving the public key. This "
+            "does not and cannot derive a key from a public key alone."
+        ),
+    )
+    assembler.add_argument("--public-key", required=True, help="SEC 1 public key in hexadecimal")
+    assembler.add_argument(
+        "--template",
+        required=True,
+        help=(
+            f"{HEX_DIGITS} hex digits where '?' marks unknown digits, exactly one "
+            "contiguous run, for example 0000...0000????????"
+        ),
+    )
+    assembler.add_argument(
+        "--max-unknown-bits",
+        type=int,
+        default=32,
+        metavar="BITS",
+        help=f"refuse templates wider than BITS unknown bits (default 32, max {MAX_UNKNOWN_BITS})",
+    )
+    assembler.add_argument(
+        "--reveal",
+        action="store_true",
+        help="print the assembled scalar (it is a private key; it is redacted by default)",
+    )
+    _add_report_options(assembler, flag="--report-format")
+    assembler.set_defaults(handler=_cmd_assemble_private_key)
+
+    comparer = subparsers.add_parser(
+        "compare-keys",
+        help="segment a set of public keys and compare them position by position",
+        description=(
+            "Compare public coordinates nibble by nibble, report shared prefixes and "
+            "suffixes, and detect small scalar offsets between keys. Nothing here "
+            "solves a discrete logarithm over the full group."
+        ),
+    )
+    comparator_source = comparer.add_mutually_exclusive_group(required=True)
+    comparator_source.add_argument(
+        "--public-key",
+        action="append",
+        metavar="KEY",
+        help="public key in hexadecimal (repeat the option for each key)",
+    )
+    comparator_source.add_argument(
+        "--input-file",
+        metavar="PATH",
+        help=f"file with one public key per line (max {MAX_BATCH_KEYS} keys)",
+    )
+    comparer.add_argument(
+        "--max-delta-bits",
+        type=int,
+        default=16,
+        metavar="BITS",
+        help=f"scalar-difference window for the related-key check (default 16, max {MAX_UNKNOWN_BITS})",
+    )
+    comparer.add_argument(
+        "--max-pairs",
+        type=int,
+        default=200,
+        metavar="N",
+        help="maximum number of key pairs to examine (default 200)",
+    )
+    _add_report_options(comparer, flag="--report-format")
+    comparer.set_defaults(handler=_cmd_compare_keys)
 
     return parser
 
@@ -1284,6 +1365,156 @@ def _cmd_dissect_public_key(args: argparse.Namespace) -> int:
                 )
             )
     return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+
+
+#: Warnings printed by the reconstruction commands.
+_RECONSTRUCTION_WARNINGS: Final[tuple[str, ...]] = (
+    "A public key alone cannot yield its scalar: that is the discrete logarithm "
+    "problem, about 2^128 operations on secp256k1. This command only searches the "
+    "window you declare unknown.",
+    "The assembled scalar is a private key. It is redacted unless you pass --reveal; "
+    "treat any output, shell history, and terminal scrollback as sensitive.",
+    "Only use this on keys you generated yourself. Comparing or reconstructing "
+    "someone else's key is not legitimate even when the window is small.",
+)
+
+
+def _render_ledger_text(solution: TemplateSolution, *, reveal: bool) -> str:
+    """Render a template solution and its information ledger as text."""
+    ledger = solution.ledger
+    lines = [
+        "private key assembly",
+        "====================",
+        "",
+        "Template",
+        f"  pattern        : {solution.template.render()}",
+        f"  known digits   : {solution.template.known_digits} of {HEX_DIGITS}",
+        f"  known bits     : {solution.template.known_bits}",
+        f"  unknown window : {solution.template.unknown_bits} bits "
+        f"(starting {solution.template.unknown_start} bits from the top, "
+        f"{solution.template.low_bits} known bits below)",
+        "",
+        "Information ledger (one scale: bits of the 256-bit scalar)",
+        format_table(
+            ("Source", "Bits", "Note"),
+            [
+                (entry.label, f"{entry.bits:.0f}", abbreviate(entry.note, 58))
+                for entry in ledger.entries
+            ],
+        ),
+        f"  known   : {ledger.known_bits:.0f} bits",
+        f"  unknown : {ledger.unknown_bits:.0f} bits",
+        f"  verdict : {ledger.verdict}",
+        "",
+        "Search",
+        f"  status         : {'solved and verified' if solution.solved else 'not solved'}",
+        f"  steps          : {solution.steps}",
+        f"  elapsed        : {solution.elapsed_seconds:.3f} s",
+        f"  message        : {solution.message}",
+    ]
+    if solution.solved and solution.assembled_hex is not None:
+        if reveal:
+            lines.append(f"  assembled hex  : {solution.assembled_hex}")
+        else:
+            lines.append("  assembled hex  : redacted (pass --reveal to print the private key)")
+    lines.append("")
+    lines.append("Warnings:")
+    lines.extend(f"  - {warning}" for warning in _RECONSTRUCTION_WARNINGS)
+    return "\n".join(lines) + "\n"
+
+
+def _cmd_assemble_private_key(args: argparse.Namespace) -> int:
+    template = parse_template(args.template)
+    solution = solve_template(args.public_key, template, max_unknown_bits=args.max_unknown_bits)
+    _LOGGER.info("template search %s", "succeeded" if solution.solved else "found nothing")
+    if args.report_format == "json":
+        payload = json.dumps(
+            solution.as_dict(reveal=args.reveal), indent=2, sort_keys=True, ensure_ascii=False
+        )
+        return _emit_batch(payload + "\n", output=args.output, overwrite=args.overwrite)
+    return _emit_batch(
+        _render_ledger_text(solution, reveal=args.reveal),
+        output=args.output,
+        overwrite=args.overwrite,
+    )
+
+
+def _render_comparison_text(report: ComparisonReport) -> str:
+    """Render a key-set comparison as text."""
+    lines = [
+        "public key comparison",
+        "=====================",
+        "",
+        f"  keys compared  : {report.count}",
+        f"  pairs examined : {report.pairs_examined}" + (" (capped)" if report.truncated else ""),
+        f"  shared x prefix: {report.shared_prefix_nibbles} hex digits",
+        f"  shared x suffix: {report.shared_suffix_nibbles} hex digits",
+        "",
+        "Nibble agreement (how many keys share the most common digit at each position)",
+        format_table(
+            ("Position", "Keys agreeing", "Fraction"),
+            [
+                (
+                    f"{index + 1:02d}",
+                    str(count),
+                    f"{count / report.count:.2f}",
+                )
+                for index, count in enumerate(report.nibble_agreement)
+                if count > 1
+            ]
+            or [("-", "1", f"{1 / report.count:.2f}")],
+        ),
+        "",
+        "Pairwise Hamming distance of the x coordinates",
+        format_table(
+            ("Pair", "Distance (bits of 256)"),
+            [
+                (f"{left}-{right}", f"{distance}")
+                for left, right, distance in report.pairwise_hamming[:40]
+            ],
+        )
+        if report.pairwise_hamming
+        else "  none",
+        "",
+        "Related keys (small scalar offsets proved from public data)",
+    ]
+    if report.relationships:
+        lines.append(
+            format_table(
+                ("Left", "Right", "Delta", "Verified"),
+                [
+                    (
+                        str(item.left),
+                        str(item.right),
+                        str(item.delta),
+                        "yes" if item.verified else "no",
+                    )
+                    for item in report.relationships
+                ],
+            )
+        )
+        lines.append(
+            "  A delta means Q_right = Q_left + delta * G: if you know one scalar, you "
+            "know the other. It does not reveal either scalar on its own."
+        )
+    else:
+        lines.append("  none inside the requested window")
+    lines.append("")
+    lines.append("Notes:")
+    lines.extend(f"  - {note}" for note in report.notes)
+    return "\n".join(lines) + "\n"
+
+
+def _cmd_compare_keys(args: argparse.Namespace) -> int:
+    keys = tuple(args.public_key) if args.public_key else tuple(_read_public_keys(args.input_file))
+    report = compare_keys(keys, max_delta_bits=args.max_delta_bits, max_pairs=args.max_pairs)
+    _LOGGER.info("compared %d public keys", report.count)
+    if args.report_format == "json":
+        payload = json.dumps(report.as_dict(), indent=2, sort_keys=True, ensure_ascii=False)
+        return _emit_batch(payload + "\n", output=args.output, overwrite=args.overwrite)
+    return _emit_batch(
+        _render_comparison_text(report), output=args.output, overwrite=args.overwrite
+    )
 
 
 # ---------------------------------------------------------------------------

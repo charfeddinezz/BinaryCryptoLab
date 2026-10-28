@@ -805,3 +805,189 @@ class TestDebugMode:
         code, _, err = cli_runner(["--debug", "analyze-binary", "1"])
         assert code == 1
         assert "Traceback" in err
+
+
+class TestAssemblePrivateKeyCommand:
+    """Template assembly: ledger output, redaction, and refusal."""
+
+    #: A synthetic scalar with a known tail, used only inside these tests.
+    TAIL_SCALAR = int("c0ffee" + "0" * 50 + "abcdef", 16)
+
+    @property
+    def _public_key(self) -> str:
+        from binarycryptolab.ecc import public_key_from_private
+
+        return public_key_from_private(self.TAIL_SCALAR).compressed_hex
+
+    @property
+    def _template(self) -> str:
+        return f"{self.TAIL_SCALAR:064x}"[:58] + "?" * 6
+
+    def test_text_report_redacts_the_scalar(self, cli_runner: CliRunner) -> None:
+        code, out, err = cli_runner(
+            [
+                "assemble-private-key",
+                "--public-key",
+                self._public_key,
+                "--template",
+                self._template,
+            ]
+        )
+        assert code == 0
+        assert err == ""
+        assert "Information ledger" in out
+        assert "unknown window : 24 bits" in out
+        assert "solved and verified" in out
+        assert "redacted" in out
+        assert f"{self.TAIL_SCALAR:064x}" not in out
+        assert "cannot yield its scalar" in out
+
+    def test_reveal_prints_the_scalar(self, cli_runner: CliRunner) -> None:
+        code, out, _ = cli_runner(
+            [
+                "assemble-private-key",
+                "--public-key",
+                self._public_key,
+                "--template",
+                self._template,
+                "--reveal",
+            ]
+        )
+        assert code == 0
+        assert f"{self.TAIL_SCALAR:064x}" in out
+
+    def test_json_default_is_redacted(self, cli_runner: CliRunner) -> None:
+        code, out, _ = cli_runner(
+            [
+                "assemble-private-key",
+                "--public-key",
+                self._public_key,
+                "--template",
+                self._template,
+                "--report-format",
+                "json",
+            ]
+        )
+        assert code == 0
+        payload = json.loads(out)
+        assert payload["solved"] is True
+        assert payload["assembled_scalar_hex"] is None
+        assert payload["redacted"] is True
+        assert payload["ledger"]["unknown_bits"] == 24.0
+
+    def test_json_reveal_matches_the_scalar(self, cli_runner: CliRunner) -> None:
+        code, out, _ = cli_runner(
+            [
+                "assemble-private-key",
+                "--public-key",
+                self._public_key,
+                "--template",
+                self._template,
+                "--reveal",
+                "--report-format",
+                "json",
+            ]
+        )
+        assert code == 0
+        payload = json.loads(out)
+        assert payload["assembled_scalar_hex"] == f"{self.TAIL_SCALAR:064x}"
+        assert payload["verified"] is True
+
+    def test_budget_refusal_exits_one(self, cli_runner: CliRunner) -> None:
+        code, out, err = cli_runner(
+            [
+                "assemble-private-key",
+                "--public-key",
+                self._public_key,
+                "--template",
+                "0" * 40 + "?" * 24,
+                "--max-unknown-bits",
+                "16",
+            ]
+        )
+        assert code == 1
+        assert out == ""
+        assert "unknown bits" in err
+        assert f"{self.TAIL_SCALAR:064x}" not in err
+
+    def test_invalid_template_exits_one(self, cli_runner: CliRunner) -> None:
+        code, _, err = cli_runner(
+            ["assemble-private-key", "--public-key", PUBKEY_ONE_COMPRESSED, "--template", "zz"]
+        )
+        assert code == 1
+        assert "64 hex digits" in err
+
+    def test_output_file(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        target = tmp_path / "assembly.json"
+        code, out, _ = cli_runner(
+            [
+                "assemble-private-key",
+                "--public-key",
+                self._public_key,
+                "--template",
+                self._template,
+                "--report-format",
+                "json",
+                "--output",
+                str(target),
+            ]
+        )
+        assert code == 0
+        assert "Report written to" in out
+        assert json.loads(target.read_text(encoding="utf-8"))["solved"] is True
+
+
+class TestCompareKeysCommand:
+    """Comparing a key set through the CLI."""
+
+    def _keys(self) -> list[str]:
+        from binarycryptolab.ecc import public_key_from_private
+
+        return [public_key_from_private(1000 + step).compressed_hex for step in range(3)]
+
+    def test_text_report(self, cli_runner: CliRunner) -> None:
+        keys = self._keys()
+        arguments = ["compare-keys"]
+        for key in keys:
+            arguments.extend(["--public-key", key])
+        code, out, err = cli_runner(arguments)
+        assert code == 0
+        assert err == ""
+        assert "public key comparison" in out
+        assert "keys compared  : 3" in out
+        assert "Related keys" in out
+        assert "Delta" in out
+        assert "does not reveal either scalar" in out
+
+    def test_json_report(self, cli_runner: CliRunner) -> None:
+        keys = self._keys()
+        arguments = ["compare-keys", "--report-format", "json"]
+        for key in keys:
+            arguments.extend(["--public-key", key])
+        code, out, _ = cli_runner(arguments)
+        assert code == 0
+        payload = json.loads(out)
+        assert payload["count"] == 3
+        assert payload["relationships"]
+        assert payload["relationships"][0]["verified"] is True
+
+    def test_input_file(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        source = tmp_path / "keys.txt"
+        source.write_text("\n".join(self._keys()) + "\n", encoding="utf-8")
+        code, out, _ = cli_runner(["compare-keys", "--input-file", str(source)])
+        assert code == 0
+        assert "keys compared  : 3" in out
+
+    def test_single_key_is_an_error(self, cli_runner: CliRunner) -> None:
+        code, _, err = cli_runner(["compare-keys", "--public-key", PUBKEY_ONE_COMPRESSED])
+        assert code == 1
+        assert "at least two" in err
+
+    def test_pair_cap_is_reported(self, cli_runner: CliRunner) -> None:
+        keys = self._keys()
+        arguments = ["compare-keys", "--max-pairs", "1"]
+        for key in keys:
+            arguments.extend(["--public-key", key])
+        code, out, _ = cli_runner(arguments)
+        assert code == 0
+        assert "(capped)" in out

@@ -52,6 +52,8 @@ COMMAND
   bitcoin-address   derive a Bitcoin address from a public key
   decode-address    decode and validate a Bitcoin address
   dissect-public-key  dissect a public key and forecast its structure
+  assemble-private-key  assemble a scalar from known hex digits plus a bounded search
+  compare-keys        compare a set of public keys and detect related scalars
 ```
 
 Global options must appear **before** the command:
@@ -464,6 +466,61 @@ print(dissection.x.leading_zero_bits)  # 1
 print(dissection.addresses[0].address)  # 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH
 print(dissection.as_dict()["forecast"]["recoverable"])  # False
 ```
+
+## assemble-private-key
+
+```bash
+binarycryptolab assemble-private-key \
+    --public-key 03ff6129f30fb6e99e22a879f4365ab2566116db82843da41b2be4b79d29d9d26d \
+    --template c0ffee0000000000000000000000000000000000000000000000000000??????
+```
+
+```text
+Template
+  pattern        : c0ff ee00 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 00?? ????
+  known digits   : 58 of 64
+  unknown window : 24 bits (starting 232 bits from the top, 0 known bits below)
+
+Information ledger (one scale: bits of the 256-bit scalar)
+Source                            Bits
+--------------------------------  ----
+58 known hexadecimal digits       232
+public key coordinates x and y    0
+addresses, hashes, and encodings  0
+mirror point -P and x-only form   0
+  known   : 232 bits
+  unknown : 24 bits
+  verdict : searchable: 24 unknown bits, about 2^12 operations
+
+Search
+  status         : solved and verified
+  steps          : 4096
+  assembled hex  : redacted (pass --reveal to print the private key)
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--public-key` | The key the assembled scalar must reproduce. |
+| `--template` | 64 hex digits with `?` for the unknown window (one contiguous run). |
+| `--max-unknown-bits` | Refuse wider windows (default 32, maximum 40). |
+| `--reveal` | Print the assembled scalar. Without it the scalar is redacted. |
+| `--report-format` | `text`, `json`, or `csv`; JSON redacts the scalar unless `--reveal`. |
+
+A public key alone cannot produce its scalar: see
+[`key_assembly.md`](key_assembly.md) for the ledger, the formulas, the cost table,
+and the limits.
+
+## compare-keys
+
+```bash
+binarycryptolab compare-keys --public-key 02... --public-key 03... --public-key 02...
+binarycryptolab compare-keys --input-file keys.txt --max-delta-bits 16 --max-pairs 200
+```
+
+The report lists nibble agreement across the `x` coordinates, shared prefixes and
+suffixes, pairwise Hamming distances, and any small scalar difference it can prove
+(`Q_right = Q_left + delta * G`). Differences are found with a bounded search over
+the difference only.
 
 ## Reports
 

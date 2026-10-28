@@ -65,6 +65,8 @@ Dependencies point downwards only. `bitcoin` may use `ecc`, `hashing`,
 | `bech32.py` | Bech32/Bech32m checksums and BIP-173/BIP-350 SegWit address encoding. |
 | `bitcoin.py` | Network parameters, P2PKH/P2WPKH/P2SH-P2WPKH derivation, the address matrix, and decoding/validation. |
 | `forensics.py` | Deep public-key dissection, structural findings with probabilities, evidence combination, Bayes factors, and the scored forecast. |
+| `curve_arithmetic.py` | Analysis-only secp256k1 point arithmetic and a bounded interval discrete log, cross-checked against `cryptography` in the tests. |
+| `key_reconstruction.py` | Hex segmentation, the single-scale information ledger, bounded scalar assembly, and public-key set comparison. |
 | `models/analysis_result.py` | Frozen dataclasses shared by the analysis engines, reports, CLI, and GUI. |
 | `reports/` | Deterministic JSON and long-format CSV rendering plus atomic file writes. |
 | `utils/` | Terminal-safe formatting helpers and stderr logging configuration. |
@@ -108,6 +110,29 @@ opaque. `special_functions.py` supplies the required special functions
 (regularized incomplete gamma, normal tails, Fisher combination) without adding a
 SciPy dependency, so the report can be recomputed from the standard library
 alone.
+
+## Bounded reconstruction
+
+`key_reconstruction.py` is the only place in the package that can produce a
+private scalar, and only under conditions the caller states explicitly:
+
+* the caller supplies a 64-digit hexadecimal template with one contiguous unknown
+  window;
+* the window is at most 40 bits, which bounds the search at about `2^20` table
+  entries;
+* the assembled scalar is re-derived through `cryptography` and compared with the
+  input public key before it is reported;
+* the scalar is excluded from `repr` and redacted in JSON unless the caller asks
+  for it.
+
+`curve_arithmetic.py` exists because OpenSSL exposes scalar multiplication of the
+generator but not point addition, which a baby-step/giant-step walk needs. It is
+analysis code only - never key generation, signing, or secret protection - and it
+is not trusted silently: the test suite compares multiplication with
+`cryptography` for random scalars, checks the group laws, and checks SEC 1 decoding
+against the library in three encodings. A wrong implementation would fail those
+tests long before it could produce a false "solution", and every solution is
+verified independently anyway.
 
 ## Design decisions
 

@@ -4,6 +4,48 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-10-28
+
+### Added
+
+* **`binarycryptolab.curve_arithmetic`** - analysis-only secp256k1 arithmetic
+  (Jacobian add/double/multiply, negation, subtraction, SEC 1 decoding) and a
+  bounded baby-step/giant-step interval solver. Cross-checked against
+  `cryptography`/OpenSSL for random scalars, against the published generator
+  vector, and through the group laws; it is never used for key generation,
+  signing, or secret protection.
+* **`binarycryptolab.key_reconstruction`** - the segment/compare/assemble layer:
+  * `segment_hex` / `segment_bits` split values into nibbles, bytes, 16-, 32-, and
+    64-bit words with bit offsets;
+  * `parse_template` accepts a 64-digit hexadecimal pattern with one contiguous
+    `?` window and reports known bits, window width, and the bits below it;
+  * `InformationLedger` / `build_ledger` reduce every fact about a scalar to one
+    scale of bits: 4 bits per known hex digit, `log2 m` for a congruence,
+    `256 - log2 w` for an interval, and **explicitly zero** for public
+    coordinates, addresses, hashes, and the mirror point;
+  * `solve_template` searches the unknown window only, assembles
+    `k = K + x * 2^low`, and re-derives the public key through `cryptography`
+    before reporting; refusals explain the missing bits instead of guessing;
+  * `solve_offset` and `compare_keys` detect small scalar differences between
+    public keys (the related-key case) together with nibble agreement, shared
+    prefixes/suffixes, and pairwise Hamming distances.
+* `assemble-private-key` and `compare-keys` CLI commands, plus
+  `examples/key_assembly.py` and `docs/key_assembly.md`.
+
+### Security
+
+* The assembled scalar is excluded from `repr` and redacted in JSON unless
+  `reveal=True`; the CLI prints it only with `--reveal` and warns that the value
+  is a private key.
+* Windows above 40 bits are refused with an explanatory error, so no call can turn
+  into a general attack on the curve.
+* Error messages never contain the scalar, its digits, or a partial key.
+
+### Tests
+
+* 131 new tests (993 total): 51 for the curve arithmetic, 67 for segmentation,
+  the ledger, assembly and comparison, and 13 for the two new CLI commands.
+
 ## [1.2.0] - 2026-10-28
 
 ### Added

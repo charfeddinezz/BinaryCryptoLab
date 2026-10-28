@@ -69,6 +69,12 @@ never stores private keys, and never attempts to recover anyone's key.
   exhaustive, Pollard-rho, and baby-step/giant-step search — with an explicit,
   permanent statement that no key recovery is implemented or possible.
 - Batch mode: dissect up to 1000 keys from a file and export text, JSON, or CSV.
+- **Bounded key assembly**: segment a scalar into hex digits, reduce every fact
+  about it (known digits, residues, intervals, and the public data itself) to one
+  scale of bits, search the unknown window (up to 40 bits), and assemble the
+  64-digit scalar - verified against the public key, redacted by default.
+- **Key-set comparison**: nibble agreement, shared prefixes and suffixes, pairwise
+  Hamming distances, and provable small scalar offsets between keys.
 
 ### Interfaces and reports
 
@@ -76,7 +82,7 @@ never stores private keys, and never attempts to recover anyone's key.
   exit codes, and private-key warnings.
 - Deterministic JSON and CSV reports, atomic writes, overwrite protection.
 - Optional Streamlit interface with JSON/CSV downloads and no network access.
-- 860+ tests: unit, property-based (Hypothesis), integration, CLI, and GUI.
+- 990+ tests: unit, property-based (Hypothesis), integration, CLI, and GUI.
 
 ## Requirements
 
@@ -199,6 +205,8 @@ binarycryptolab [--version] [-v|--verbose] [--debug] COMMAND ...
 | `bitcoin-address` | Derive a P2PKH or P2WPKH address from a public key. |
 | `decode-address` | Validate and decode a Bitcoin address. |
 | `dissect-public-key` | Deep public-key dissection, address matrix, and structural forecast. |
+| `assemble-private-key` | Assemble a scalar from known hex digits plus a bounded, verified search. |
+| `compare-keys` | Compare public keys and detect small scalar offsets between them. |
 
 Run `binarycryptolab COMMAND --help` for the full option list. The complete
 reference, with outputs, is in [`docs/usage.md`](docs/usage.md).
