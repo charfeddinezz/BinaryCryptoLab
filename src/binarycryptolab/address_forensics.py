@@ -37,6 +37,7 @@ exactly why no such knowledge can be derived from it.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -50,7 +51,9 @@ from .bitcoin import (
     derive_p2wpkh_address,
     hash160_public_key,
 )
+from .hd_keys import ExtendedKeyMatch, match_address, parse_extended_public_key
 from .randomness import RandomnessReport, bits_from_bytes, randomness_report
+from .script_templates import ScriptVerification, verify_script_claim
 from .special_functions import binomial_two_sided_p
 from .statistics import byte_statistics
 
@@ -199,6 +202,11 @@ class VanityReport:
         corrected_probability: Bonferroni-corrected value over the number of
             prefix lengths examined; always ``1.0`` for a post-hoc observation
             because the search space is "any prefix at all".
+        encoding: Which counting model produced the value: ``base58check``,
+            ``bech32``, or ``cashaddr``.
+        constrained_bits: How many payload bits the prefix fixes. The exact
+            probability is ``2^-constrained_bits`` for the bit-aligned formats,
+            so this number is the honest way to report a value that underflows.
         verdict: Plain-language conclusion.
         note: The look-elsewhere explanation.
     """
@@ -208,6 +216,8 @@ class VanityReport:
     naive_probability: float
     claimed_in_advance: bool
     corrected_probability: float
+    encoding: str
+    constrained_bits: int
     verdict: str
     note: str
 
@@ -219,9 +229,159 @@ class VanityReport:
             "naive_probability": self.naive_probability,
             "claimed_in_advance": self.claimed_in_advance,
             "corrected_probability": self.corrected_probability,
+            "encoding": self.encoding,
+            "constrained_bits": self.constrained_bits,
             "verdict": self.verdict,
             "note": self.note,
         }
+
+
+_BECH32_ALPHABET: Final = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+_CASHADDR_ALPHABET: Final = _BECH32_ALPHABET
+_MAX_EXACT_BITS: Final = 1023
+
+
+def _flatten_bits(segments: tuple[tuple[int, int], ...]) -> list[int | None]:
+    """Flatten ``(value, width)`` segments into a bit list of fixed values."""
+    bits: list[int | None] = []
+    for value, width in segments:
+        bits.extend((value >> (width - 1 - index)) & 1 for index in range(width))
+    return bits
+
+
+def _pad_to_groups(bits: list[int | None]) -> list[int | None]:
+    """Pad a bit stream to a whole number of five-bit groups with zeros."""
+    remainder = len(bits) % 5
+    if remainder:
+        bits.extend([0] * (5 - remainder))
+    return bits
+
+
+def _char_probability(bits: list[int | None], characters: str, alphabet: str) -> tuple[float, int]:
+    """Return ``(probability, constrained_bits)`` for a character sequence.
+
+    Each character fixes five bits of the stream. Bits that are already fixed by
+    the version byte must agree, which is why the exact value can be far larger
+    than ``alphabet^-k``.
+    """
+    unknown = 0
+    position = 0
+    for character in characters:
+        index = alphabet.find(character)
+        if index < 0:
+            return 0.0, unknown
+        for offset in range(5):
+            if position >= len(bits):
+                return 0.0, unknown
+            expected = bits[position]
+            if expected is None:
+                unknown += 1
+            elif expected != ((index >> (4 - offset)) & 1):
+                return 0.0, unknown
+            position += 1
+    if unknown > _MAX_EXACT_BITS:
+        return 0.0, unknown
+    return 2.0**-unknown, unknown
+
+
+def bech32_prefix_probability(address: str, prefix: str) -> tuple[float, int]:
+    """Return the exact probability that a random SegWit address starts with *prefix*.
+
+    The human-readable part is fixed, the witness version character is fixed, and
+    every following character pins five bits of the witness program. Counting those
+    bits exactly gives the true probability, which is much larger than the naive
+    ``32^-k`` because the first data character is not free.
+
+    Args:
+        address: A valid Bech32 or Bech32m address, used for the HRP and version.
+        prefix: The prefix to evaluate, in either case.
+
+    Returns:
+        ``(probability, constrained_bits)``.  A prefix that cannot occur returns
+        ``(0.0, bits_examined)``.
+
+    Raises:
+        ValueError: The prefix is empty.
+    """
+    lowered_address = address.lower()
+    lowered_prefix = prefix.strip().lower()
+    if not lowered_prefix:
+        raise ValueError("prefix must not be empty")
+    separator = lowered_address.rfind("1")
+    hrp = lowered_address[:separator]
+    data = lowered_address[separator + 1 :]
+    witness_version = _BECH32_ALPHABET.find(data[0])
+    program_length = (len(data) - 1) * 5 // 8
+    if witness_version < 0:
+        raise ValueError("address does not carry a valid witness version")
+
+    if len(lowered_prefix) <= len(hrp):
+        if hrp.startswith(lowered_prefix):
+            return 1.0, 0
+        return 0.0, 0
+    if not hrp.startswith(lowered_prefix[: len(hrp)]):
+        return 0.0, 0
+    rest = lowered_prefix[len(hrp) :]
+    if not rest or rest[0] != "1":
+        return 0.0, 0
+    characters = rest[1:]
+    if not characters:
+        return 1.0, 0
+    bits = _pad_to_groups(_flatten_bits(((witness_version, 5), (0, program_length * 8))))
+    # The program bits are unknown: replace them after the version group.
+    for index in range(5, min(len(bits), 5 + program_length * 8)):
+        bits[index] = None
+    return _char_probability(bits, characters, _BECH32_ALPHABET)
+
+
+def cashaddr_prefix_probability(address: str, prefix: str) -> tuple[float, int]:
+    """Return the exact probability that a random CashAddr starts with *prefix*.
+
+    The eight-bit version byte is fixed, so the first one or two data characters
+    are partly determined; the remaining characters pin five bits each.
+
+    Args:
+        address: A valid CashAddr address.
+        prefix: The prefix to evaluate, including or excluding the ``prefix:`` part.
+
+    Returns:
+        ``(probability, constrained_bits)``.
+
+    Raises:
+        ValueError: The address has no prefix, or the prefix is empty.
+    """
+    lowered_address = address.strip().lower()
+    lowered_prefix = prefix.strip().lower()
+    if not lowered_prefix:
+        raise ValueError("prefix must not be empty")
+    if ":" not in lowered_address:
+        raise ValueError("CashAddr addresses require an explicit prefix")
+    declared, _, body = lowered_address.partition(":")
+
+    if not lowered_prefix.startswith(declared[: len(lowered_prefix)]):
+        return 0.0, 0
+    if len(lowered_prefix) <= len(declared):
+        return (1.0, 0) if declared.startswith(lowered_prefix) else (0.0, 0)
+    remainder = lowered_prefix[len(declared) :]
+    if not remainder.startswith(":"):
+        return 0.0, 0
+    if len(remainder) == 1:
+        return 1.0, 0
+    characters = remainder[1:]
+    version = _CASHADDR_ALPHABET.find(body[0])
+    if version < 0:
+        raise ValueError("CashAddr body is malformed")
+    payload_bytes = (len(body) - 8) * 5 // 8 - 1
+    version_byte = int.from_bytes(
+        __import__("binarycryptolab.address_formats", fromlist=["_cashaddr_bytes"])._cashaddr_bytes(
+            [_CASHADDR_ALPHABET.find(character) for character in body[:-8]]
+        )[:1],
+        "big",
+    )
+    bits = _pad_to_groups(_flatten_bits(((version_byte, 8), (0, payload_bytes * 8))))
+    for index in range(8, min(len(bits), 8 + payload_bytes * 8)):
+        bits[index] = None
+    return _char_probability(bits, characters, _CASHADDR_ALPHABET)
 
 
 def vanity_report(
@@ -233,76 +393,134 @@ def vanity_report(
 ) -> VanityReport:
     """Evaluate the prefix of *address* for evidence of vanity generation.
 
-    A six-character prefix looks improbable, yet every address has one: being
-    impressed by the prefix that happens to appear is the look-elsewhere fallacy.
-    Only a prefix **declared in advance** supports a significance claim, which is
-    why ``claimed_prefix`` is required for a non-trivial verdict.
+    Every encoding the package accepts is measured with its own exact counting
+    model, because they do not share one: Base58Check has fixed version and digit
+    counts, while Bech32 and CashAddr fix their version inside the first data
+    character and pin five bits per following character.
+
+    A prefix noticed after the fact is not evidence: every address has one. Only a
+    prefix **declared in advance** supports a significance claim, which is why
+    ``claimed_prefix`` is required for a non-trivial verdict.
 
     Args:
-        address: A Base58Check address.
+        address: A valid address on any supported encoding.
         claimed_prefix: The prefix the caller expected before seeing the address.
-        version: Version prefix to assume.  ``None`` uses the decoded value.
-        payload_length: Payload size used by the counting model.
+        version: Version prefix to assume for Base58Check.  ``None`` uses the
+            decoded value.
+        payload_length: Payload size used by the Base58 counting model.
 
     Returns:
         The vanity analysis.
 
     Raises:
-        ValueError: The address is not Base58Check, or the claimed prefix is not
-            Base58.
+        ValueError: The prefix is empty or not representable in the address's
+            alphabet.
     """
     decoded = decode_address_input(address)
-    if decoded.encoding != "base58check":
-        raise ValueError("vanity analysis is defined for Base58Check addresses only")
-    if len(decoded.payload) != 20:
-        raise ValueError("vanity analysis is defined for 20-byte payloads only")
-    if version is None:
-        version = decoded.version_byte if decoded.version_byte is not None else 0
-    if decoded.version_byte is not None and version != decoded.version_byte:
-        raise ValueError("the supplied version does not match the address")
-    normalized = decoded.address or address.strip()
-    length = len(decoded.payload)
+    text = decoded.address or address.strip()
+
+    if decoded.encoding == "base58check":
+        if len(decoded.payload) != 20:
+            raise ValueError("Base58 vanity analysis is defined for 20-byte payloads only")
+        if version is None:
+            version = decoded.version_byte if decoded.version_byte is not None else 0
+        if decoded.version_byte is not None and version != decoded.version_byte:
+            raise ValueError("the supplied version does not match the address")
+
+        def measure(candidate: str) -> tuple[float, int]:
+            probability = base58_prefix_probability(
+                candidate, version=version, payload_length=payload_length
+            )
+            bits = 0 if probability <= 0.0 else max(0, math.ceil(-math.log2(probability)))
+            return probability, bits
+
+        encoding = "base58check"
+        naive_base = 58.0
+        free_offset = 1
+        default_length = 6
+    elif decoded.encoding in {"bech32", "bech32m"}:
+        measure = lambda candidate: bech32_prefix_probability(text, candidate)  # noqa: E731
+        encoding = decoded.encoding
+        naive_base = 32.0
+        free_offset = len(decoded.human_readable_part or "") + 2
+        default_length = free_offset + 2
+    elif decoded.encoding == "cashaddr":
+        measure = lambda candidate: cashaddr_prefix_probability(text, candidate)  # noqa: E731
+        encoding = "cashaddr"
+        naive_base = 32.0
+        free_offset = len(decoded.human_readable_part or "") + 2
+        default_length = free_offset + 3
+    else:
+        raise ValueError(f"prefix analysis is not defined for {decoded.encoding!r} inputs")
 
     if claimed_prefix is None:
-        prefix = normalized[:6]
-        probability = base58_prefix_probability(prefix, version=version, payload_length=length)
-        naive = 58.0 ** (-max(0, len(prefix) - 1))
+        prefix = text[:default_length]
+        probability, bits = measure(prefix)
+        naive = naive_base ** (-max(0, len(prefix) - free_offset))
         return VanityReport(
             prefix=prefix,
             probability=probability,
             naive_probability=naive,
             claimed_in_advance=False,
             corrected_probability=1.0,
+            encoding=encoding,
+            constrained_bits=bits,
             verdict="no significance claim: the prefix was chosen after seeing the address",
             note=(
-                "Every address has a six-character prefix, so this value cannot be a "
-                "p-value. Pass a prefix you declared in advance to test it properly."
+                f"Every address has a prefix, and this one fixes {bits} bit(s) of the "
+                "payload. That still cannot be a p-value, because the prefix was picked "
+                "after seeing the address. Pass one you declared in advance to test it."
             ),
         )
+
     prefix = claimed_prefix.strip()
-    probability = base58_prefix_probability(prefix, version=version, payload_length=length)
-    naive = 58.0 ** (-max(0, len(prefix) - 1))
-    matches = normalized.startswith(prefix)
+    if not prefix:
+        raise ValueError("prefix must not be empty")
+    lowered_prefix = prefix.lower() if encoding != "base58check" else prefix
+    probability, bits = measure(lowered_prefix)
+    naive = naive_base ** (-max(0, len(prefix) - free_offset))
+    matches = (
+        text.startswith(prefix)
+        if encoding == "base58check"
+        else text.lower().startswith(lowered_prefix)
+    )
     corrected = min(1.0, probability)
     if not matches:
         verdict = "the address does not start with the declared prefix"
     elif corrected < 0.01:
         verdict = (
-            f"unlikely by chance: p={corrected:.3e}, so the prefix was plausibly chosen on purpose"
+            f"unlikely by chance: p={corrected:.3e} ({bits} bits), so the prefix was "
+            "plausibly chosen on purpose"
         )
     else:
         verdict = f"consistent with chance: p={corrected:.3f}"
+    if encoding == "base58check":
+        note = (
+            "The exact count accounts for the fixed version byte and digit length; "
+            "the naive 58^-k figure ignores both and is shown for comparison."
+        )
+    elif encoding == "cashaddr":
+        note = (
+            "The exact count accounts for the fixed 8-bit version byte, whose bits do "
+            "not align with the 5-bit character groups; the naive 32^-k figure ignores "
+            "that and is up to eight times smaller."
+        )
+    else:
+        note = (
+            "The exact count excludes the human-readable part, the separator, and the "
+            "witness-version character, which is why it equals 32^-k here: the alphabet "
+            "is exactly 2^5. Every character pins five bits of the program."
+        )
     return VanityReport(
         prefix=prefix,
         probability=probability,
         naive_probability=naive,
         claimed_in_advance=True,
         corrected_probability=corrected,
+        encoding=encoding,
+        constrained_bits=bits,
         verdict=verdict,
-        note=(
-            "The exact count accounts for the fixed version byte and digit length; "
-            "the naive 58^-k figure ignores both and is shown for comparison."
-        ),
+        note=note,
     )
 
 
@@ -787,6 +1005,25 @@ def _hardness(address_type: str, payload_length: int) -> HardnessReport:
             ),
             caveats=caveats,
         )
+    if address_type == "unknown":
+        return HardnessReport(
+            steps=(
+                _DECODE_STEP,
+                _hash_step(
+                    _HASH160_BITS,
+                    algorithm="whatever hash the chain uses (unknown)",
+                    kind="committed object",
+                ),
+                _dl_step(),
+            ),
+            total_cost_log2=float(_HASH160_BITS + _DL_BITS),
+            verdict=(
+                "The chain is not registered, so the rule behind the digest is unknown. "
+                "If it is a hash of a key, the chain costs about 2^288; if it is a hash "
+                "of a script, it costs about 2^160. Both are out of reach."
+            ),
+            caveats=_BASE_CAVEATS,
+        )
     return HardnessReport(
         steps=(_DECODE_STEP,),
         total_cost_log2=None,
@@ -811,6 +1048,18 @@ def _scale(address_type: str, payload_length: int) -> AddressKnowledgeScale:
                 f"The address fixes a {bits}-bit digest, which leaves about "
                 f"2^{_SCALAR_BITS - bits} public keys consistent with it (2^256 "
                 "points, 2^160 digests). It fixes zero bits of the private scalar."
+            ),
+        )
+    if address_type == "unknown":
+        return AddressKnowledgeScale(
+            address_bits=bits,
+            public_key_candidates_log2=float(_SCALAR_BITS - bits),
+            scalar_bits_known=0.0,
+            scalar_bits_total=_SCALAR_BITS,
+            note=(
+                "The version prefix is not registered, so the commitment rule is "
+                "unknown. The payload is a 160-bit digest; whether it commits to a key, "
+                "a script, or something else cannot be determined offline."
             ),
         )
     if address_type == "p2sh":
@@ -915,6 +1164,8 @@ class AddressDissection:
         vanity: Prefix analysis.
         taproot: Taproot key inspection, for P2TR outputs.
         safety: The offline hazard audit.
+        script_claim: Verification of a caller-supplied redeem or witness script.
+        key_match: The result of searching a caller-supplied extended public key.
         notes: Context for the reader.
         limitations: What the report cannot decide.
     """
@@ -951,6 +1202,8 @@ class AddressDissection:
     safety: SafetyAudit
     notes: tuple[str, ...]
     limitations: tuple[str, ...]
+    script_claim: ScriptVerification | None = None
+    key_match: ExtendedKeyMatch | None = None
 
     @property
     def recoverable(self) -> bool:
@@ -992,6 +1245,8 @@ class AddressDissection:
             "vanity": self.vanity.as_dict(),
             "taproot": None if self.taproot is None else self.taproot.as_dict(),
             "safety": self.safety.as_dict(),
+            "script_claim": None if self.script_claim is None else self.script_claim.as_dict(),
+            "key_match": None if self.key_match is None else self.key_match.as_dict(),
             "recoverable": self.recoverable,
             "notes": list(self.notes),
             "limitations": list(self.limitations),
@@ -1023,6 +1278,8 @@ def _locking_script(
         return (f"{len(payload):02x}{payload.hex()}ac", f"{payload.hex()} OP_CHECKSIG")
     if address_type == "op_return":
         return ("6a", "OP_RETURN")
+    if address_type == "unknown":
+        return ("", "unknown: the version prefix is not registered")
     if address_type == "nonstandard":
         return ("", "unrecognised locking script")
     if address_type.startswith("witness_v"):
@@ -1044,6 +1301,9 @@ def dissect_address(
     *,
     claimed_prefix: str | None = None,
     network: str | Network | None = None,
+    redeem_script: str | None = None,
+    xpub: str | None = None,
+    xpub_range: tuple[int, int] = (0, 20),
 ) -> AddressDissection:
     """Dissect an address, BIP-21 URI, or locking script into public facts.
 
@@ -1052,6 +1312,11 @@ def dissect_address(
             ``scriptPubKey`` in hexadecimal.
         claimed_prefix: A vanity prefix declared in advance, for the prefix test.
         network: Expected network.  When given, a mismatch is an error.
+        redeem_script: A candidate redeem or witness script.  When given, the tool
+            checks whether the address actually commits to it and classifies it.
+        xpub: An extended public key.  When given, the tool derives addresses from
+            public data only and searches ``xpub_range`` for a match.
+        xpub_range: ``(start, count)`` for the extended-key search.
 
     Returns:
         The complete dissection.
@@ -1103,12 +1368,29 @@ def dissect_address(
             naive_probability=1.0,
             claimed_in_advance=False,
             corrected_probability=1.0,
+            encoding=decoded.encoding,
+            constrained_bits=0,
             verdict="vanity analysis applies to Base58Check addresses only",
             note="SegWit and CashAddr prefixes are constrained by their prefix rules, "
             "so they are not mined.",
         )
 
     safety = audit_decoded_input(decoded, declared_prefix=claimed_prefix)
+    script_claim = (
+        None
+        if redeem_script is None
+        else verify_script_claim(decoded.address or address, redeem_script)
+    )
+    key_match = (
+        None
+        if xpub is None
+        else match_address(
+            parse_extended_public_key(xpub),
+            decoded.address or address,
+            start=xpub_range[0],
+            count=xpub_range[1],
+        )
+    )
     scale = _scale(kind, len(payload))
     hardness = _hardness(kind, len(payload))
 
@@ -1128,6 +1410,16 @@ def dissect_address(
         notes.append("The input was a raw locking script; the address shown was derived from it.")
     if decoded.notes:
         notes.extend(decoded.notes)
+    if script_claim is not None:
+        notes.append(
+            "The redeem script was supplied by the caller and verified against the "
+            "address payload; it is not fetched, guessed, or derived."
+        )
+    if key_match is not None:
+        notes.append(
+            "Extended-key matching uses public derivation only: no private key is "
+            "used, accepted, or derived, and hardened indices are impossible."
+        )
     if decoded.chain != "bitcoin":
         notes.append(
             f"The format is registered on {decoded.chain}; version prefixes are "
@@ -1176,6 +1468,8 @@ def dissect_address(
         safety=safety,
         notes=tuple(notes),
         limitations=limitations,
+        script_claim=script_claim,
+        key_match=key_match,
     )
 
 

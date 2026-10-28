@@ -438,6 +438,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="a vanity prefix declared in advance; only then is the p-value valid",
     )
     dissect_address_command.add_argument(
+        "--redeem-script",
+        default=None,
+        metavar="HEX",
+        help=(
+            "a candidate redeem or witness script; verified against the address "
+            "payload and classified (multisig, HTLC, timelock, ...)"
+        ),
+    )
+    dissect_address_command.add_argument(
+        "--xpub",
+        default=None,
+        metavar="KEY",
+        help="an extended public key to search for this address (public derivation only)",
+    )
+    dissect_address_command.add_argument(
+        "--index-range",
+        default="0:20",
+        metavar="START:COUNT",
+        help="child indices examined with --xpub (default 0:20, count at most 10000)",
+    )
+    dissect_address_command.add_argument(
+        "--stdin",
+        action="store_true",
+        help="read inputs from standard input, one per line",
+    )
+    dissect_address_command.add_argument(
         "--public-key",
         default=None,
         metavar="HEX",
@@ -1787,10 +1813,11 @@ def _render_address_dissection_text(
             f"  total  : {total}",
             f"  verdict: {dissection.hardness.verdict}",
             "",
-            "Prefix analysis",
+            f"Prefix analysis ({dissection.vanity.encoding})",
             f"  observed prefix : {dissection.vanity.prefix}",
             f"  exact probability: {dissection.vanity.probability:.3e}",
-            f"  naive 58^-k      : {dissection.vanity.naive_probability:.3e}",
+            f"  constrained bits : {dissection.vanity.constrained_bits}",
+            f"  naive alphabet^-k: {dissection.vanity.naive_probability:.3e}",
             f"  verdict          : {dissection.vanity.verdict}",
             f"  note             : {dissection.vanity.note}",
             "",
@@ -1818,6 +1845,74 @@ def _render_address_dissection_text(
                 f"  meaning  : {entry.meaning}",
             ]
         )
+
+    if dissection.script_claim is not None:
+        claim = dissection.script_claim
+        template = claim.template
+        lines.extend(
+            [
+                "",
+                "Redeem-script claim (supplied by the caller)",
+                format_table(
+                    ("Field", "Value"),
+                    [
+                        ("template", template.kind),
+                        ("hash algorithm", claim.hash_algorithm or "-"),
+                        (
+                            "required hash",
+                            abbreviate(claim.required_hash, 64) if claim.required_hash else "-",
+                        ),
+                        ("computed hash", abbreviate(claim.computed_hash, 64) or "-"),
+                        ("verified", "YES" if claim.matches else "no"),
+                    ],
+                ),
+            ]
+        )
+        if template.kind == "multisig":
+            lines.append(f"  multisig        : {template.threshold}-of-{template.total_keys}")
+            lines.append(f"  keys            : {len(template.public_keys)} published")
+        if template.hash_lock:
+            lines.append(f"  hash lock       : {template.hash_lock} ({template.hash_algorithm})")
+        if template.timelock_value is not None:
+            lines.append(
+                f"  timelock        : {template.timelock_value} ({template.timelock_kind})"
+            )
+        lines.append(f"  spend paths     : {template.spend_paths}")
+        lines.append(f"  disassembly     : {abbreviate(template.disassembly, 96)}")
+        lines.extend(f"  note            : {note}" for note in template.notes)
+        lines.append(f"  verdict         : {claim.verdict}")
+
+    if dissection.key_match is not None:
+        match = dissection.key_match
+        lines.extend(
+            [
+                "",
+                "Extended public key search (public derivation only)",
+                format_table(
+                    ("Field", "Value"),
+                    [
+                        ("key version", match.key_label),
+                        ("network", match.network),
+                        ("derives", match.script_type),
+                        ("range searched", f"{match.range_start}..{match.range_end - 1}"),
+                        ("indices checked", str(match.checked)),
+                        (
+                            "match",
+                            "none"
+                            if not match.matched
+                            else f"index {match.matched_index} ({match.matched_path})",
+                        ),
+                    ],
+                ),
+            ]
+        )
+        lines.append(
+            format_table(
+                ("Index", "Derived address"),
+                [(str(index), addr) for index, addr in match.sample],
+            )
+        )
+        lines.append(f"  verdict: {match.verdict}")
 
     if experiment is not None:
         lines.extend(
@@ -1850,6 +1945,27 @@ def _render_address_dissection_text(
     return "\n".join(lines) + "\n"
 
 
+def _parse_index_range(text: str) -> tuple[int, int]:
+    """Parse ``START:COUNT`` into a tuple.
+
+    Raises:
+        InputValidationError: The text is malformed.
+    """
+    start_text, separator, count_text = text.partition(":")
+    if not separator:
+        raise InputValidationError("--index-range must look like START:COUNT, e.g. 0:20")
+    try:
+        start = int(start_text)
+        count = int(count_text)
+    except ValueError as exc:
+        raise InputValidationError("--index-range needs two integers") from exc
+    if start < 0 or count < 1:
+        raise InputValidationError("--index-range needs start >= 0 and count >= 1")
+    if count > 10_000:
+        raise InputValidationError("--index-range count is capped at 10000")
+    return start, count
+
+
 def _collect_address_inputs(args: argparse.Namespace) -> list[str]:
     """Return every address, URI, or script the caller asked about.
 
@@ -1857,6 +1973,11 @@ def _collect_address_inputs(args: argparse.Namespace) -> list[str]:
         InputValidationError: No input was given.
     """
     items: list[str] = list(args.address or [])
+    if getattr(args, "stdin", False):
+        for line in sys.stdin.read().splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                items.append(stripped)
     if args.input_file is not None:
         path = Path(args.input_file)
         try:
@@ -1889,6 +2010,8 @@ _ADDRESS_CSV_COLUMNS: Final = (
     "scalar_bits_known",
     "total_cost_log2",
     "safety_grade",
+    "script_claim",
+    "xpub_match",
     "unspendable",
     "anyone_can_spend",
     "checksum_valid",
@@ -1921,6 +2044,16 @@ def _dissection_csv_row(
         "scalar_bits_known": f"{dissection.scale.scalar_bits_known:g}",
         "total_cost_log2": "" if total is None else f"{total:g}",
         "safety_grade": dissection.safety.grade,
+        "script_claim": (
+            ""
+            if dissection.script_claim is None
+            else ("match" if dissection.script_claim.matches else "no-match")
+        ),
+        "xpub_match": (
+            ""
+            if dissection.key_match is None or dissection.key_match.matched_index is None
+            else str(dissection.key_match.matched_index)
+        ),
         "unspendable": "yes" if dissection.safety.unspendable else "no",
         "anyone_can_spend": "yes" if dissection.safety.anyone_can_spend else "no",
         "checksum_valid": "yes" if dissection.checksum_valid else "no",
@@ -1963,6 +2096,8 @@ def _summarise_dissections(
 
 
 def _cmd_dissect_address(args: argparse.Namespace) -> int:
+    if args.index_range is not None:
+        _parse_index_range(args.index_range)
     items = _collect_address_inputs(args)
     dissections: list[AddressDissection] = []
     errors: list[tuple[str, str]] = []
@@ -1973,6 +2108,11 @@ def _cmd_dissect_address(args: argparse.Namespace) -> int:
                 item,
                 claimed_prefix=args.claimed_prefix,
                 network=args.network,
+                redeem_script=args.redeem_script,
+                xpub=args.xpub,
+                xpub_range=(
+                    _parse_index_range(args.index_range) if args.xpub is not None else (0, 20)
+                ),
             )
         except BinaryCryptoLabError as exc:
             errors.append((item, str(exc)))

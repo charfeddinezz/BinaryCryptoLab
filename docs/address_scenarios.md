@@ -76,7 +76,51 @@ parameter the tool does not implement.
 None of these can certify safety, and the verdict says so every time: only the key
 holder can prove spendability by signing.
 
-## 4. Limitations: removed, reduced, and irreducible
+## 4. Redeem scripts and extended keys
+
+Two questions used to end in "cannot be determined offline". Both now have an exact
+answer when the caller supplies the missing public artefact.
+
+**"What script does this P2SH address pay to?"** Supply it:
+
+```bash
+binarycryptolab dissect-address 36toL31ARhUYQ57g1m6H8SShwqWGqbP9KL \
+    --redeem-script 5221021111...ae
+```
+
+```text
+template        multisig
+hash algorithm  HASH160
+required hash   39131b5122870635dfc7d9a3ef0b76652e06c50d
+computed hash   39131b5122870635dfc7d9a3ef0b76652e06c50d
+verified        YES
+  multisig        : 2-of-3
+  keys            : 3 published
+  spend paths     : 1
+```
+
+That is a proof, not a guess: the hash either matches or it does not. The
+classification covers multisig (with threshold), HTLC (hash lock plus branches),
+CLTV/CSV timelocks, and the standard single-key forms.
+
+**"Does this address belong to my wallet?"** Supply the extended public key:
+
+```bash
+binarycryptolab dissect-address 1CXYxpgiiGy9yZraeEHA5PQgU9Ds8iAHE1 --xpub xpub68G... --index-range 0:20
+```
+
+```text
+key version      xpub
+derives          p2pkh
+range searched   0..19
+indices checked  8
+match            index 7 (m/7)
+```
+
+Public derivation only: `K_child = K + IL*G`. A hardened index cannot be derived
+and is refused with that explanation, because it would need the private key.
+
+## 5. Limitations: removed, reduced, and irreducible
 
 | Previous limitation | Status | How |
 | --- | --- | --- |
@@ -96,7 +140,7 @@ address is a preimage problem with no known shortcut; proving ownership requires
 signature the tool is designed never to see; and reading chain state requires a
 network, which this project refuses to use.
 
-## 5. Reproducing the claims
+## 6. Reproducing the claims
 
 ```bash
 # every scenario in one batch
@@ -108,8 +152,24 @@ binarycryptolab dissect-address "script:6a0b68656c6c6f"
 
 # the offline audit
 binarycryptolab audit-address-data 1GeMQKJ8... --input-file export.json --report-format json
+
+# scripts, keys, and the prefix models
+binarycryptolab dissect-address 36toL31ARhUYQ57g1m6H8SShwqWGqbP9KL --redeem-script 52...
+binarycryptolab dissect-address 1CXYxpgiiGy9yZraeEHA5PQgU9Ds8iAHE1 --xpub xpub68G...
+binarycryptolab dissect-address bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a
 ```
 
 The test suite covers each row of the input matrix, the CashAddr round trip against
 the published vector, the Taproot tweak against OpenSSL, and the exact-versus-Monte
 Carlo prefix mathematics.
+
+## 7. What the v1.6.0 verification actually rests on
+
+| Claim | Independent check |
+| --- | --- |
+| BIP-32 public derivation | matches the published vectors `m`, `m/0H`, `m/0H/1`, and 125/125 random keys against a private-side derivation written separately in the tests |
+| redeem-script verification | the address is derived *from* the script in the test, so a wrong hash cannot pass |
+| CashAddr checksum | the published example is re-encoded and must reproduce itself |
+| Bech32 prefix probability | `2^-bits` equals the naive `32^-k` exactly, as it must, because the alphabet is `2^5` |
+| CashAddr prefix probability | the fixed 8-bit version byte is why 3 characters cost 12 bits, not 15 |
+| Base58 prefix probability | exact count agrees with a 200 000-address Monte Carlo |

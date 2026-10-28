@@ -207,7 +207,7 @@ binarycryptolab [--version] [-v|--verbose] [--debug] COMMAND ...
 | `dissect-public-key` | Deep public-key dissection, address matrix, and structural forecast. |
 | `assemble-private-key` | Assemble a scalar from known hex digits plus a bounded, verified search. |
 | `compare-keys` | Compare public keys and detect small scalar offsets between them. |
-| `dissect-address` | Dissect any address, payment URI, or locking script: exact prefix probability, payload statistics, per-type backward cost, safety audit. |
+| `dissect-address` | Dissect any address, payment URI, or locking script: exact prefix probability for every encoding, per-type backward cost, safety audit, redeem-script verification, and extended-key matching. |
 | `audit-address-data` | Audit a UTXO export you supply yourself, offline: script match, duplicates, totals. |
 
 Run `binarycryptolab COMMAND --help` for the full option list. The complete

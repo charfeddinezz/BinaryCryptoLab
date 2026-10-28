@@ -776,8 +776,42 @@ def _decode_base58_input(text: str, uri_params: tuple[tuple[str, str], ...]) -> 
             formats=formats,
             notes=tuple(notes),
         )
+    # An unregistered version is still decoded: refusing would hide the payload,
+    # and the caller may be looking at a chain this table does not list yet.
+    for width in (1, 2):
+        payload = body[width:]
+        if len(payload) == _HASH160_BYTES:
+            version = int.from_bytes(body[:width], "big")
+            return DecodedInput(
+                input_kind="bip21_uri" if uri_params else "address",
+                original=text,
+                address=text,
+                encoding="base58check",
+                address_type="unknown",
+                chain="unknown",
+                chain_candidates=("unknown",),
+                network="unknown",
+                network_ambiguous=True,
+                version_byte=version,
+                version_bytes=width,
+                human_readable_part=None,
+                payload=payload,
+                checksum_hex=checksum.hex(),
+                recomputed_checksum_hex=recomputed.hex(),
+                checksum_valid=True,
+                witness_version=None,
+                leading_zero_bytes=len(body) - len(body.lstrip(b"\x00")),
+                base58_leading_ones=len(text) - len(text.lstrip("1")),
+                uri_params=uri_params,
+                formats=(),
+                notes=(
+                    f"The version prefix 0x{version:0{width * 2}x} is not in this "
+                    "tool's registry, so the chain, the network, and the address type "
+                    "are unknown. The checksum and the payload are still exact.",
+                ),
+            )
     raise AddressEncodingError(
-        "Base58Check payload is not 20 bytes, or the version prefix is not registered"
+        "Base58Check payload is not 20 bytes, so it is neither an address nor a key"
     )
 
 

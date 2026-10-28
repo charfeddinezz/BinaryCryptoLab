@@ -235,10 +235,16 @@ class TestBase58Inputs:
         assert decoded.chain == "zcash"
         assert decoded.version_bytes == 2
 
-    def test_unknown_version_is_rejected(self) -> None:
+    def test_unknown_version_is_decoded_and_labelled(self) -> None:
+        # v1.6.0 removed the refusal: an unregistered prefix is reported, not hidden.
         address = base58check_encode(b"\x7f" + bytes(range(20)))
-        with pytest.raises(AddressEncodingError):
-            decode_address_input(address)
+        decoded = decode_address_input(address)
+        assert decoded.chain == "unknown"
+        assert decoded.address_type == "unknown"
+        assert decoded.version_byte == 0x7F
+        assert decoded.checksum_valid is True
+        assert len(decoded.payload) == 20
+        assert "not in this tool's registry" in decoded.notes[0]
 
     def test_wif_is_refused_without_echo(self) -> None:
         wif = base58check_encode(b"\x80" + bytes(range(32)) + b"\x01")

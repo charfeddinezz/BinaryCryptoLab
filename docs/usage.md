@@ -542,6 +542,13 @@ binarycryptolab dissect-address --input-file addresses.txt --report-format csv
 
 # the controlled experiment: your own public key against an address
 binarycryptolab dissect-address bc1p... --public-key 02...
+
+# a redeem script you already have, and an extended public key you already hold
+binarycryptolab dissect-address 36toL... --redeem-script 52210211...ae
+binarycryptolab dissect-address 1CXYx... --xpub xpub68G... --index-range 0:100
+
+# pipe a list in
+cat addresses.txt | binarycryptolab dissect-address --stdin --report-format csv
 ```
 
 ### Accepted inputs
@@ -576,7 +583,9 @@ to mean a script, and an address otherwise.
 | Taproot | output key, on-curve check, y parity, NUMS-key check |
 | One scale | bits that specify the output, candidates still possible, bits of the scalar known |
 | Backward chain | per-type costs: 2^288 for P2PKH, 2^128 for Taproot, 2^0 for an undefined witness version |
-| Prefix analysis | observed prefix, exact probability, naive `58^-k`, verdict |
+| Prefix analysis | observed prefix, exact probability, constrained bits, naive `alphabet^-k`, verdict, for **every** encoding |
+| Redeem script | with `--redeem-script`: hash verification and template (multisig, HTLC, timelock, ...) |
+| Extended key | with `--xpub`: derived addresses and the matching index, public derivation only |
 | Safety audit | documented hazards, graded `danger` / `review` / `no-known-hazard` |
 | Caveats | Grover, Shor, collision-versus-preimage, look-elsewhere |
 
@@ -585,8 +594,8 @@ to mean a script, and an address otherwise.
 | Type | Payload | Backward chain | Note |
 | --- | --- | --- | --- |
 | P2PKH, P2WPKH | 20-byte hash | `2^288` | hash preimage `2^160`, then discrete log `2^128` |
-| P2SH | 20-byte script hash | `2^160` | scripts come from a small family, so the real barrier is lower |
-| P2WSH | 32-byte script hash | `2^256` | same caveat: guessing the script family beats brute force |
+| P2SH | 20-byte script hash | `2^160` | scripts come from a small family, so the real barrier is lower; `--redeem-script` removes the uncertainty entirely |
+| P2WSH | 32-byte script hash | `2^256` | same caveat; `--redeem-script` verifies the script byte for byte |
 | P2TR | 32-byte x-only key | `2^128` | no hash layer at all: the address *is* a public key |
 | witness v2..v16 | any program | `2^0` | unencumbered by BIP-141: anyone can spend |
 | P2PK | public key | `2^128` | the key is published in the output |
@@ -599,8 +608,67 @@ to mean a script, and an address otherwise.
 * `--report-format csv` emits one row per item, with an `error` column.
 * `--report-format json` emits the single dissection when there is exactly one
   item, and an envelope with `items`, `errors`, and `summary` otherwise.
+* Reads from standard input with `--stdin` (blank lines and `#` lines skipped).
 * Exit code `1` means at least one item failed; the successful ones are still
   reported. Passing no input at all is also exit code `1`.
+
+### Redeem scripts: `--redeem-script`
+
+An address commits to a script but never shows it. If you already have the script
+(from a wallet backup, a counterparty, or your own records), the tool checks the
+commitment exactly:
+
+* P2SH: is `HASH160(script)` equal to the address payload?
+* P2WSH: is `SHA256(script)` equal to the address payload?
+* Other types: is the script byte-identical to the address's `scriptPubKey`?
+
+It then classifies the script and extracts what a reader needs:
+
+| Template | What is extracted |
+| --- | --- |
+| `multisig` | threshold *m*, total *n*, every published key |
+| `htlc` | the hash lock (value and algorithm), the keys, the branch count |
+| `timelock` | the CLTV/CSV value and whether it is height, time, or relative |
+| `p2pkh`, `p2sh`, `p2wpkh`, `p2wsh`, `p2tr`, `p2pk`, `op_return`, `nonstandard` | the type itself |
+
+A match is a cryptographic proof that the script is the one the address pays to (up
+to hash collisions). It says nothing about who holds the keys.
+
+### Extended keys: `--xpub`
+
+The most common real question is "does this address belong to my wallet?" That
+needs no private material: BIP-32 public derivation computes `K_child = K + IL*G`.
+
+```bash
+binarycryptolab dissect-address 1CXYxpgiiGy9yZraeEHA5PQgU9Ds8iAHE1 --xpub xpub68G... --index-range 0:100
+```
+
+| Version | Derives | Network |
+| --- | --- | --- |
+| `xpub` / `tpub` | P2PKH | mainnet / testnet |
+| `ypub` / `upub` | P2SH-P2WPKH | mainnet / testnet |
+| `zpub` / `vpub` | P2WPKH | mainnet / testnet |
+| `Ypub`, `Zpub`, `Upub`, `Vpub` | multisig accounts: recognised, but single-key derivation is refused | mainnet / testnet |
+
+Limits, printed on every run:
+
+* **Hardened indices are impossible.** They need the private key, which this tool
+  never accepts; `m/0'/1` is rejected with that explanation rather than an error code.
+* **A miss is not proof.** The address may be deeper, in another branch, or use a
+  different script type. The verdict says exactly that.
+* **An extended key is privacy-sensitive.** It is not a spending key, but it reveals
+  every address in its branch and lets anyone correlate their history.
+
+### Prefix probability: one model per encoding
+
+| Encoding | Model | Naive figure |
+| --- | --- | --- |
+| Base58Check | exact integer count over all payloads | `58^-k`, wrong by ~2.5x for short prefixes |
+| Bech32/Bech32m | exact bit count (5 bits per data character) | `32^-k`, **correct** once the HRP, separator, and version character are excluded |
+| CashAddr | exact bit count (fixed 8-bit version byte) | `32^-k`, wrong by up to 8x because 8 bits do not align with 5-bit groups |
+
+Every report prints the constrained bit count, so a probability that underflows to
+`0.0` still has an exact, readable answer.
 
 ### Two honesty rules that the report enforces
 

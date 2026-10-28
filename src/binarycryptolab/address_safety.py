@@ -464,7 +464,19 @@ def audit_decoded_input(
             )
         )
 
-    if decoded.network != "mainnet":
+    if decoded.network == "unknown":
+        checks.append(
+            _check(
+                "unregistered_version",
+                "notice",
+                "the version prefix is not registered",
+                "The chain and the commitment rule are unknown, so this audit can "
+                "verify the checksum and the payload but cannot classify the output. "
+                "An address on an unlisted chain looks exactly like this.",
+                f"0x{decoded.version_byte:02x}" if decoded.version_byte is not None else "-",
+            )
+        )
+    elif decoded.network != "mainnet":
         checks.append(
             _check(
                 "non_mainnet",

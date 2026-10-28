@@ -557,7 +557,7 @@ class TestDissectAddressCommand:
         code, out, _ = cli_runner(["dissect-address", ADDRESS_P2WPKH_G])
         assert code == 0
         assert "encoding               bech32" in out
-        assert "Base58Check addresses only" in out
+        assert "Prefix analysis (bech32)" in out
 
     def test_rejects_a_public_key(self, cli_runner: CliRunner) -> None:
         code, _, err = cli_runner(["dissect-address", PUBKEY_ONE_COMPRESSED])

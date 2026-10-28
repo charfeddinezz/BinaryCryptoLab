@@ -4,6 +4,46 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-10-28
+
+### Added
+
+* **`binarycryptolab.script_templates`** - a total Bitcoin script parser and template
+  classifier, plus redeem-script verification:
+  * tokenizes pushes (direct, PUSHDATA1/2/4), small integers, and every opcode the
+    templates use, with the byte offset of any truncation;
+  * classifies P2PKH, P2SH, P2WPKH, P2WSH, P2TR, P2PK, multisig (with threshold and
+    full key list), HTLC (hash lock, algorithm, branches), CLTV/CSV timelocks (value
+    and unit), OP_RETURN, and non-standard scripts;
+  * `verify_script_claim` checks a caller-supplied script against a P2SH or P2WSH
+    address by recomputing `HASH160` or `SHA256`, which turns the former "opaque
+    script hash" warning into a byte-exact proof when the script is available.
+* **`binarycryptolab.hd_keys`** - BIP-32 extended public keys:
+  * parses `xpub`/`ypub`/`zpub`/`tpub`/`upub`/`vpub` (and the `Y`/`Z`/`U`/`V`
+    multisig variants) with full structural validation;
+  * derives non-hardened children and paths through **public** derivation only,
+    refusing hardened indices with an explanation instead of an error code;
+  * searches an index range for an address and reports the matching index;
+  * refuses extended *private* keys without echoing them.
+* **Exact prefix probability for every encoding** - `bech32_prefix_probability` and
+  `cashaddr_prefix_probability` count constrained bits exactly, so the former
+  "Base58Check only" refusal is gone. The Bech32 value coincides with `32^-k` (as it
+  must, the alphabet is `2^5`); the CashAddr value differs by up to 8x because its
+  8-bit version byte does not align with 5-bit groups.
+* **`dissect-address --redeem-script`, `--xpub`, `--index-range`, `--stdin`** with
+  matching text, JSON, and CSV output.
+* Unregistered Base58 version bytes are now decoded and labelled `unknown` rather
+  than refused, with the checksum still verified and an `unregistered_version` notice
+  in the safety audit.
+* 122 new tests (1318 total), including the published BIP-32 vectors and a
+  125-of-125 agreement check between public and private derivation.
+
+### Fixed
+
+* BIP-32 child serialization used the parent chain code instead of the derived one.
+  Caught by comparing against the published `m/0H/1` vector and an independent
+  private-side derivation in the tests.
+
 ## [1.5.0] - 2026-10-28
 
 ### Added

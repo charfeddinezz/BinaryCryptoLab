@@ -37,6 +37,7 @@ SAMPLE_ADDRESS = "1GeMQKJ8rqvRWKLMqyVJjPKmWGcR67ZNmb"
 SAMPLE_PAYLOAD = "ab9a4edd7600fe91d0f46a97dc851ad45c1ce176"
 #: A BIP-173 native SegWit vector.
 SEGWIT_ADDRESS = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+CASHADDR_ADDRESS = "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
 
 
 @pytest.fixture(scope="module")
@@ -129,9 +130,39 @@ class TestVanityReport:
         report = vanity_report(SAMPLE_ADDRESS, claimed_prefix="1GeM")
         assert report.naive_probability < report.probability
 
-    def test_rejects_segwit(self) -> None:
-        with pytest.raises(ValueError):
-            vanity_report(SEGWIT_ADDRESS)
+    def test_segwit_now_has_its_own_exact_count(self) -> None:
+        # v1.6.0 removed the refusal: Bech32 has a counting model of its own.
+        report = vanity_report(SEGWIT_ADDRESS)
+        assert report.encoding == "bech32"
+        assert report.constrained_bits >= 0
+        assert report.claimed_in_advance is False
+
+    def test_segwit_claimed_prefix(self) -> None:
+        report = vanity_report(SEGWIT_ADDRESS, claimed_prefix="bc1qw508")
+        assert report.claimed_in_advance is True
+        assert report.probability == pytest.approx(2.0**-20)
+        assert report.constrained_bits == 20
+
+    def test_bech32_naive_equals_exact(self) -> None:
+        # The Bech32 alphabet is 2^5 and the version character is excluded from both
+        # counts, so here the naive figure is genuinely right; the correction only
+        # matters for Base58 and CashAddr.
+        report = vanity_report(SEGWIT_ADDRESS, claimed_prefix="bc1qw5")
+        assert report.probability == pytest.approx(report.naive_probability)
+
+    def test_cashaddr_differs_from_naive(self) -> None:
+        report = vanity_report(CASHADDR_ADDRESS, claimed_prefix="bitcoincash:qpm2")
+        assert report.encoding == "cashaddr"
+        assert report.probability > report.naive_probability
+
+    def test_impossible_prefix_character(self) -> None:
+        report = vanity_report(SEGWIT_ADDRESS, claimed_prefix="bc1qb")
+        assert report.probability == 0.0
+        assert "does not start" in report.verdict
+
+    def test_wrong_human_readable_part(self) -> None:
+        report = vanity_report(SEGWIT_ADDRESS, claimed_prefix="tb1qw5")
+        assert report.probability == 0.0
 
     def test_as_dict(self) -> None:
         payload = vanity_report(SAMPLE_ADDRESS).as_dict()
@@ -141,6 +172,8 @@ class TestVanityReport:
             "naive_probability",
             "claimed_in_advance",
             "corrected_probability",
+            "encoding",
+            "constrained_bits",
             "verdict",
             "note",
         }
@@ -267,6 +300,8 @@ class TestDissectAddress:
             "vanity",
             "taproot",
             "safety",
+            "script_claim",
+            "key_match",
             "recoverable",
             "notes",
             "limitations",
@@ -281,8 +316,9 @@ class TestDissectAddress:
         assert segwit_dissection.script_pubkey_hex.startswith("0014")
         assert segwit_dissection.script_asm.startswith("OP_0 ")
 
-    def test_segwit_has_no_vanity_claim(self, segwit_dissection: AddressDissection) -> None:
-        assert "Base58Check addresses only" in segwit_dissection.vanity.verdict
+    def test_segwit_has_its_own_prefix_model(self, segwit_dissection: AddressDissection) -> None:
+        assert segwit_dissection.vanity.encoding == "bech32"
+        assert segwit_dissection.vanity.constrained_bits > 0
 
     def test_bech32m_address(self) -> None:
         # BIP-350 v1 vector: Taproot uses Bech32m.
