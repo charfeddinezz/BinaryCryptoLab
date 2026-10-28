@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Final
 
 from ._version import __version__
+from .address_forensics import AddressDissection, dissect_address
 from .analysis import analyze, attach_hashes
 from .binary_utils import binary_to_bytes
 from .bitcoin import Network, address_from_public_key, decode_address
@@ -393,6 +394,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_report_options(comparer, flag="--report-format")
     comparer.set_defaults(handler=_cmd_compare_keys)
+
+    dissect_address_command = subparsers.add_parser(
+        "dissect-address",
+        help="dissect an address into every public fact and every backward cost",
+        description=(
+            "Decode and re-verify an address (checksum, version or HRP, locking "
+            "script), profile its payload with exact statistical tests, state what it "
+            "does and does not reveal on the single scale of bits, and price every "
+            "step of the backward chain. No key is recovered."
+        ),
+    )
+    dissect_address_command.add_argument("address", help="Base58Check or SegWit address")
+    dissect_address_command.add_argument(
+        "--network",
+        choices=("mainnet", "testnet", "regtest", "signet"),
+        default=None,
+        help="expected network (default: infer)",
+    )
+    dissect_address_command.add_argument(
+        "--claimed-prefix",
+        default=None,
+        metavar="PREFIX",
+        help="a vanity prefix declared in advance; only then is the p-value valid",
+    )
+    _add_report_options(dissect_address_command, flag="--report-format")
+    dissect_address_command.set_defaults(handler=_cmd_dissect_address)
 
     return parser
 
@@ -1514,6 +1541,166 @@ def _cmd_compare_keys(args: argparse.Namespace) -> int:
         return _emit_batch(payload + "\n", output=args.output, overwrite=args.overwrite)
     return _emit_batch(
         _render_comparison_text(report), output=args.output, overwrite=args.overwrite
+    )
+
+
+def _render_address_dissection_text(dissection: AddressDissection) -> str:
+    """Render an address dissection as text."""
+    profile = dissection.payload_profile
+    lines = [
+        "address dissection",
+        "===================",
+        "",
+        format_table(
+            ("Field", "Value"),
+            [
+                ("address", dissection.address),
+                ("encoding", dissection.encoding),
+                ("type", dissection.address_type),
+                ("network", dissection.network),
+                ("network ambiguous", "yes" if dissection.network_ambiguous else "no"),
+                (
+                    "version byte",
+                    "-" if dissection.version_byte is None else f"0x{dissection.version_byte:02x}",
+                ),
+                ("HRP", dissection.human_readable_part or "-"),
+                ("payload", dissection.payload_hex),
+                ("payload bytes", str(dissection.payload_length_bytes)),
+                ("checksum (encoded)", dissection.checksum_hex or "-"),
+                ("checksum (recomputed)", dissection.recomputed_checksum_hex or "-"),
+                ("checksum valid", "yes" if dissection.checksum_valid else "NO"),
+                (
+                    "witness version",
+                    "-" if dissection.witness_version is None else str(dissection.witness_version),
+                ),
+                ("leading zero bytes", str(dissection.leading_zero_bytes)),
+                ("leading '1' chars", str(dissection.base58_leading_ones)),
+            ],
+        ),
+        "",
+        "Locking script",
+        f"  hex : {dissection.script_pubkey_hex}",
+        f"  asm : {dissection.script_asm}",
+        "",
+        "Payload profile",
+        format_table(
+            ("Field", "Value"),
+            [
+                ("bit length", str(profile.bit_length)),
+                ("leading zero bits", str(profile.leading_zero_bits)),
+                ("hamming weight", str(profile.hamming_weight)),
+                ("hamming p-value", f"{profile.hamming_p_value:.4f}"),
+                ("distinct bytes", str(profile.distinct_bytes)),
+                ("byte entropy", f"{profile.byte_entropy:.3f} bits/byte"),
+            ],
+        ),
+        "",
+        "Randomness battery (payload bits)",
+        format_table(
+            ("Test", "Statistic", "p-value", "Result"),
+            [
+                (
+                    test.name,
+                    f"{test.statistic:.4f}",
+                    f"{test.p_value:.3e}",
+                    "pass" if test.passed else "FAIL",
+                )
+                for test in dissection.randomness.tests
+            ],
+        ),
+        f"  Fisher p={dissection.randomness.fisher_p_value:.3e}; "
+        f"Bonferroni p={dissection.randomness.bonferroni_p_value:.3e}; "
+        f"family-wise {'pass' if dissection.randomness.familywise_pass else 'FAIL'}",
+        "",
+        f"Structural findings ({len(dissection.findings)})",
+    ]
+    if dissection.findings:
+        lines.append(
+            format_table(
+                ("Severity", "Code", "Evidence", "p"),
+                [
+                    (
+                        finding.severity,
+                        finding.code,
+                        abbreviate(finding.evidence, 46),
+                        f"{finding.probability:.3e}",
+                    )
+                    for finding in dissection.findings
+                ],
+            )
+        )
+    else:
+        lines.append("  none: the payload looks like a uniform 160-bit digest")
+
+    scale = dissection.scale
+    lines.extend(
+        [
+            "",
+            "What the address tells you (one scale)",
+            format_table(
+                ("Question", "Answer"),
+                [
+                    ("bits that specify the address", f"{scale.address_bits}"),
+                    ("public keys still possible", f"2^{scale.public_key_candidates_log2:.0f}"),
+                    (
+                        "bits of the private scalar known",
+                        f"{scale.scalar_bits_known:.0f} of {scale.scalar_bits_total}",
+                    ),
+                    ("bits of the private scalar unknown", f"{scale.scalar_bits_unknown:.0f}"),
+                    ("can this tool recover the key", "no"),
+                ],
+            ),
+            f"  note: {scale.note}",
+            "",
+            "Backward chain (cost in base-2 operations)",
+            format_table(
+                ("Step", "Feasible", "Cost", "Method"),
+                [
+                    (
+                        step.step,
+                        "yes" if step.feasible else "no",
+                        f"2^{step.cost_log2:.0f}",
+                        abbreviate(step.method, 44),
+                    )
+                    for step in dissection.hardness.steps
+                ],
+            ),
+            f"  verdict: {dissection.hardness.verdict}",
+            "",
+            "Prefix analysis",
+            f"  observed prefix : {dissection.vanity.prefix}",
+            f"  exact probability: {dissection.vanity.probability:.3e}",
+            f"  naive 58^-k      : {dissection.vanity.naive_probability:.3e}",
+            f"  verdict          : {dissection.vanity.verdict}",
+            f"  note             : {dissection.vanity.note}",
+            "",
+            "Caveats",
+        ]
+    )
+    lines.extend(f"  - {caveat}" for caveat in dissection.hardness.caveats)
+    lines.append("")
+    lines.append("Notes")
+    lines.extend(f"  - {note}" for note in dissection.notes)
+    lines.append("")
+    lines.append("Limitations")
+    lines.extend(f"  - {item}" for item in dissection.limitations)
+    lines.append("")
+    lines.append("Warnings:")
+    lines.append("  - An address is not a public key; no key material is derived or claimed.")
+    lines.append("  - Ownership, balance, and history require a blockchain. This tool is offline.")
+    return "\n".join(lines) + "\n"
+
+
+def _cmd_dissect_address(args: argparse.Namespace) -> int:
+    dissection = dissect_address(args.address, claimed_prefix=args.claimed_prefix)
+    _LOGGER.info("address dissection completed")
+    if args.report_format == "json":
+        payload = json.dumps(dissection.as_dict(), indent=2, sort_keys=True, ensure_ascii=False)
+        return _emit_batch(payload + "\n", output=args.output, overwrite=args.overwrite)
+    return _emit_batch(
+        _render_address_dissection_text(dissection),
+        output=args.output,
+        overwrite=args.overwrite,
     )
 
 

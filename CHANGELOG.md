@@ -4,6 +4,46 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-10-28
+
+### Added
+
+* **`binarycryptolab.address_forensics`** - address dissection as a first-class
+  input:
+  * `dissect_address` decodes Base58Check, Bech32, and Bech32m, **recomputes** the
+    checksum, and prints the exact locking script and its disassembly;
+  * `PayloadProfile` reports bit length, leading zero bits, Hamming weight with an
+    exact two-sided binomial p-value, distinct bytes, byte entropy, and nibble
+    frequencies, and the seven-test randomness battery is reused on the payload
+    with a Fisher combination and a Bonferroni verdict;
+  * structural findings - `leading_zero_bits`, `hamming_weight`, `nibble_skew`,
+    `constant_payload`, `palindromic_payload` - each with the probability of
+    occurring by chance;
+  * `AddressKnowledgeScale` reduces every fact to bits: the address fixes 160
+    bits, leaves `2^96` candidate public keys, and fixes **zero** of the 256
+    scalar bits. `recoverable` is always `False`;
+  * `HardnessReport` prices the chain: `2^0` to the payload, `2^160` to a public
+    key, `2^128` to the scalar, `2^288` in total, with the collision-versus-preimage
+    distinction and Grover/Shor caveats stated explicitly;
+  * `base58_prefix_probability` counts prefix outcomes **exactly**. The naive
+    `58^-k` formula is shown alongside it and is smaller by a factor of about 2.5;
+    the exact values were validated against a 200 000-address Monte Carlo;
+  * `vanity_report` refuses to treat a post-hoc prefix as evidence: without a
+    declared prefix the corrected probability is `1.0`;
+  * `controlled_experiment` and `matches_public_key` relate an address to a public
+    key you already hold by deriving all four common address forms.
+* **`binarycryptolab dissect-address ADDRESS`** with `--network`, `--claimed-prefix`,
+  `--report-format {text,json}`, `--output`, and `--overwrite`.
+* `docs/address_forensics.md` and an Arabic section in `docs/how_it_works_ar.md`.
+* 57 new tests (47 module tests plus 10 CLI tests), including the exact-versus-Monte
+  Carlo prefix check.
+
+### Notes
+
+* Nothing here recovers a private key from an address, and the report says so on
+  every page: `2^96` public keys remain consistent with a 20-byte hash, and `0` of
+  `256` scalar bits are known.
+
 ## [1.3.0] - 2026-10-28
 
 ### Added

@@ -207,6 +207,7 @@ binarycryptolab [--version] [-v|--verbose] [--debug] COMMAND ...
 | `dissect-public-key` | Deep public-key dissection, address matrix, and structural forecast. |
 | `assemble-private-key` | Assemble a scalar from known hex digits plus a bounded, verified search. |
 | `compare-keys` | Compare public keys and detect small scalar offsets between them. |
+| `dissect-address` | Dissect an address: exact prefix probability, payload statistics, backward cost. |
 
 Run `binarycryptolab COMMAND --help` for the full option list. The complete
 reference, with outputs, is in [`docs/usage.md`](docs/usage.md).
@@ -339,6 +340,7 @@ converted silently.
 ### Public-key dissection and forecast
 
 ```bash
+binarycryptolab dissect-address 1GeMQKJ8rqvRWKLMqyVJjPKmWGcR67ZNmb
 binarycryptolab dissect-public-key --public-key 0279BE667E...F81798
 ```
 

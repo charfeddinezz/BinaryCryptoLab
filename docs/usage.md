@@ -54,6 +54,7 @@ COMMAND
   dissect-public-key  dissect a public key and forecast its structure
   assemble-private-key  assemble a scalar from known hex digits plus a bounded search
   compare-keys        compare a set of public keys and detect related scalars
+  dissect-address     dissect an address into public facts and backward costs
 ```
 
 Global options must appear **before** the command:
@@ -522,6 +523,50 @@ The report lists nibble agreement across the `x` coordinates, shared prefixes an
 suffixes, pairwise Hamming distances, and any small scalar difference it can prove
 (`Q_right = Q_left + delta * G`). Differences are found with a bounded search over
 the difference only.
+
+## dissect-address
+
+```bash
+binarycryptolab dissect-address 1GeMQKJ8rqvRWKLMqyVJjPKmWGcR67ZNmb
+binarycryptolab dissect-address bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 --network mainnet
+binarycryptolab dissect-address 1GeMQKJ8... --claimed-prefix 1Ge --report-format json
+```
+
+An address is a first-class input here. The command decodes it, **re-derives the
+checksum itself**, prints the exact locking script, profiles the payload with a
+seven-test randomness battery plus exact combinatorial tests, and then prices the
+backward chain in base-2 operations.
+
+What the report contains:
+
+| Section | Content |
+| --- | --- |
+| Identity | encoding (`base58check`, `bech32`, `bech32m`), type, network, version byte or HRP, witness version |
+| Integrity | encoded checksum, recomputed checksum, and whether they agree |
+| Locking script | the exact `scriptPubKey` bytes and their disassembly |
+| Payload profile | bit length, leading zero bits, Hamming weight with an exact binomial p-value, distinct bytes, byte entropy, nibble frequencies |
+| Randomness | monobit, runs, longest run, serial correlation, approximate entropy, nibble uniformity, distinct bytes - each with a p-value, plus a Fisher combination and a Bonferroni-adjusted family-wise verdict |
+| Findings | structural oddities such as leading zero bits, extreme Hamming weight, nibble skew, a constant payload, or a palindromic payload - each with the probability of arising by chance |
+| One scale | bits that specify the address, public keys still consistent with it, and bits of the private scalar that are known (**always zero**) |
+| Backward chain | address to payload (free), payload to public key (2^160, preimage), public key to scalar (2^128, Pollard rho) |
+| Prefix analysis | the observed prefix, its **exact** probability, the naive `58^-k` figure for comparison, and a verdict |
+| Caveats | Grover (`2^80` on a future machine), Shor, the collision-versus-preimage distinction, and the look-elsewhere effect |
+
+Two details are worth stating plainly, because they are the usual source of
+misleading claims:
+
+* **The naive prefix probability is wrong.** `58^-k` ignores that the version byte
+  is fixed and that the digit count is fixed. The module counts integers exactly,
+  which raises the probability of `1G` from `1.72e-02` to `4.36e-02` - a factor
+  of about 2.5. Both figures are reported so the difference is visible.
+* **A prefix you noticed after the fact is not evidence.** If `--claimed-prefix`
+  is not supplied, the corrected probability is `1.0` and the verdict says the
+  prefix was found after seeing the address. Only a prefix declared in advance
+  carries its nominal p-value.
+
+The report ends with `2^96` candidate public keys and `0` of `256` scalar bits
+known. That is the honest summary: an address is a one-way commitment, and this
+command measures the commitment rather than breaking it.
 
 ## Reports
 

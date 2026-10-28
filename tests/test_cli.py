@@ -508,6 +508,100 @@ class TestDecodeAddressCommand:
         assert payload["input"]["type"] == "address"
 
 
+class TestDissectAddressCommand:
+    """The address forensics command."""
+
+    ADDRESS = "1GeMQKJ8rqvRWKLMqyVJjPKmWGcR67ZNmb"
+
+    def test_text_report_sections(self, cli_runner: CliRunner) -> None:
+        code, out, err = cli_runner(["dissect-address", self.ADDRESS])
+        assert code == 0
+        assert err == ""
+        assert "address dissection" in out
+        assert "ab9a4edd7600fe91d0f46a97dc851ad45c1ce176" in out
+        assert "checksum valid         yes" in out
+        assert "Randomness battery" in out
+        assert "What the address tells you" in out
+        assert "Backward chain" in out
+        assert "can this tool recover the key       no" in out
+        assert "An address is not a public key" in out
+
+    def test_reports_no_recovery(self, cli_runner: CliRunner) -> None:
+        code, out, _ = cli_runner(["dissect-address", self.ADDRESS])
+        assert code == 0
+        assert "0 of 256" in out
+        assert "2^96" in out
+
+    def test_post_hoc_vanity_is_flagged(self, cli_runner: CliRunner) -> None:
+        code, out, _ = cli_runner(["dissect-address", self.ADDRESS])
+        assert code == 0
+        assert "claimed in advance" in out or "after seeing" in out
+
+    def test_claimed_prefix_changes_the_verdict(self, cli_runner: CliRunner) -> None:
+        code, out, _ = cli_runner(["dissect-address", self.ADDRESS, "--claimed-prefix", "1Ge"])
+        assert code == 0
+        assert "plausibly chosen" in out
+
+    def test_json_report(self, cli_runner: CliRunner) -> None:
+        code, out, _ = cli_runner(["dissect-address", self.ADDRESS, "--report-format", "json"])
+        assert code == 0
+        payload = json.loads(out)
+        assert payload["address"] == self.ADDRESS
+        assert payload["recoverable"] is False
+        assert payload["payload_hex"] == "ab9a4edd7600fe91d0f46a97dc851ad45c1ce176"
+        assert payload["hardness"]["total_cost_log2"] == 288.0
+        assert payload["scale"]["scalar_bits_known"] == 0.0
+
+    def test_segwit_address(self, cli_runner: CliRunner) -> None:
+        code, out, _ = cli_runner(["dissect-address", ADDRESS_P2WPKH_G])
+        assert code == 0
+        assert "encoding               bech32" in out
+        assert "Base58Check addresses only" in out
+
+    def test_rejects_a_public_key(self, cli_runner: CliRunner) -> None:
+        code, _, err = cli_runner(["dissect-address", PUBKEY_ONE_COMPRESSED])
+        assert code == 1
+        assert err
+
+    def test_rejects_a_broken_checksum(self, cli_runner: CliRunner) -> None:
+        code, _, err = cli_runner(["dissect-address", self.ADDRESS[:-1] + "c"])
+        assert code == 1
+        assert err
+
+    def test_writes_to_file(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        target = tmp_path / "dissection.json"
+        code, out, _ = cli_runner(
+            [
+                "dissect-address",
+                self.ADDRESS,
+                "--report-format",
+                "json",
+                "--output",
+                str(target),
+            ]
+        )
+        assert code == 0
+        assert "Report written to" in out
+        data = json.loads(target.read_text(encoding="utf-8"))
+        assert data["address"] == self.ADDRESS
+
+    def test_refuses_to_overwrite(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        target = tmp_path / "dissection.json"
+        target.write_text("{}", encoding="utf-8")
+        code, _, err = cli_runner(
+            [
+                "dissect-address",
+                self.ADDRESS,
+                "--report-format",
+                "json",
+                "--output",
+                str(target),
+            ]
+        )
+        assert code == 1
+        assert "overwrite" in err.lower()
+
+
 class TestDissectPublicKeyCommand:
     """The deep dissection command: single key, batch mode, and reports."""
 
