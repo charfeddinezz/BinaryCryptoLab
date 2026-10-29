@@ -1,0 +1,45 @@
+{
+  "constrained_bits": 28,
+  "difficulty": 0.06043135728442187,
+  "encoding": "base58check",
+  "expected_attempts": 259550703.1894833,
+  "expected_seconds_measured": 162368.6116165855,
+  "measured": {
+    "address_type": "p2pkh",
+    "elapsed_seconds": 0.16014737799997647,
+    "iterations": 256,
+    "note": "Measured single-threaded in pure Python on this machine, using public test scalars only. Optimised native or GPU implementations are typically 10^3 to 10^6 times faster; the report's rate table covers that range.",
+    "per_second": 1598.5275762681397,
+    "seconds_per_attempt": 0.0006255756953124081
+  },
+  "notes": [
+    "Expected attempts are the mean of a geometric distribution; the actual first hit can be several times larger or smaller.",
+    "A mined prefix is not a weakness. It only shows the generator was run deliberately, which anybody can do.",
+    "No key is attacked here: the benchmark derives addresses from public test scalars, exactly as a wallet does."
+  ],
+  "prefix": "1BEwWK",
+  "probability": 3.852811753971464e-09,
+  "rate_table": [
+    {
+      "attempts_per_second": 1000.0,
+      "human": "3.0 days",
+      "seconds": 259550.70318948332
+    },
+    {
+      "attempts_per_second": 1000000.0,
+      "human": "4.3 minutes",
+      "seconds": 259.55070318948333
+    },
+    {
+      "attempts_per_second": 1000000000.0,
+      "human": "259.6 milliseconds",
+      "seconds": 0.2595507031894833
+    },
+    {
+      "attempts_per_second": 1000000000000.0,
+      "human": "259.6 microseconds",
+      "seconds": 0.0002595507031894833
+    }
+  ],
+  "verdict": "cheap: the prefix fixes only 28 bits (1.9 days at this machine's measured rate), which is a few minutes of commodity GPU time. It therefore says nothing about the address's origin"
+}

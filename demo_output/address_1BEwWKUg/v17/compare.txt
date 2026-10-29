@@ -1,0 +1,24 @@
+address comparison
+==================
+
+#  Address                             Type   Payload
+-  ----------------------------------  -----  ----------------------------------------
+1  1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa  p2pkh  70542a0b4e6776be4ba75e4d975ec8de3333fecc
+2  1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH  p2pkh  751e76e8199196d454941c45d1b3a323f1433bd6
+3  3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy  p2sh   b472a266d0bd89c13706a4132ccfb16f7c3b9fcb
+
+Pairs examined: 3
+
+Relations (0)
+  none: the payloads are unrelated at this resolution
+
+Verdict: no relation found among 3 pairs: the payloads are unrelated at the resolution this tool can see
+
+Notes
+  - Address comparison cannot relate two private keys: that is a discrete-log question, not a string question.
+  - A shared payload on two networks is address reuse, which is a privacy and safety hazard, not evidence of a shared owner.
+  - Absence of a relation is informative only at this resolution; addresses of different key pairs are expected to show none.
+
+Warnings:
+  - A shared payload is reuse, not a shared owner.
+  - Two addresses from different keys are expected to show no relation.

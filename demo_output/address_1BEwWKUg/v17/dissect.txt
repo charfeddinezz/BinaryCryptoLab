@@ -1,0 +1,128 @@
+address dissection
+===================
+
+Field                  Value
+---------------------  ----------------------------------------
+address                1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa
+input kind             address
+encoding               base58check
+type                   p2pkh
+chain                  bitcoin
+chain candidates       bitcoin, bitcoin_cash
+network                mainnet
+network ambiguous      no
+version byte           0x00
+HRP                    -
+payload                70542a0b4e6776be4ba75e4d975ec8de3333fecc
+payload bytes          20
+checksum (encoded)     e5fae25f
+checksum (recomputed)  e5fae25f
+checksum valid         yes
+witness version        -
+leading zero bytes     1
+leading '1' chars      1
+
+Locking script
+  hex : 76a91470542a0b4e6776be4ba75e4d975ec8de3333fecc88ac
+  asm : OP_DUP OP_HASH160 70542a0b4e6776be4ba75e4d975ec8de3333fecc OP_EQUALVERIFY OP_CHECKSIG
+
+Payload profile
+Field              Value
+-----------------  ---------------
+label              hash160
+bit length         159
+leading zero bits  1
+hamming weight     88
+hamming p-value    0.2356
+distinct bytes     18
+byte entropy       4.122 bits/byte
+
+Randomness battery (payload bits)
+Test                 Statistic  p-value    Result
+-------------------  ---------  ---------  ------
+monobit              1.2649     2.059e-01  pass
+runs                 0.4291     6.678e-01  pass
+longest_run          9.0000     1.400e-01  pass
+serial_correlation   -0.0354    6.547e-01  pass
+approximate_entropy  0.6783     3.127e-01  pass
+nibble_uniformity    16.0000    3.821e-01  pass
+distinct_bytes       18.0000    1.589e-01  pass
+  Fisher p=2.738e-01; Bonferroni p=9.797e-01; family-wise pass
+
+Structural findings (0)
+  none: the payload looks like a uniform digest
+
+What the output tells you (one scale)
+Question                            Answer
+----------------------------------  --------
+bits that specify the output        160
+candidates still possible           2^96
+bits of the private scalar known    0 of 256
+bits of the private scalar unknown  256
+can this tool recover the key       no
+  note: The address fixes a 160-bit digest, which leaves about 2^96 public keys consistent with it (2^256 points, 2^160 digests). It fixes zero bits of the private scalar.
+
+Backward chain (cost in base-2 operations)
+Step                               Feasible  Cost   Method
+---------------------------------  --------  -----  --------------------------------------------
+input -> version/payload/checksum  yes       2^0    Base58Check, Bech32,... or CashAddr decoding
+payload -> public key              no        2^160  preimage of RIPEMD16...) over 256-bit inputs
+public key -> private scalar       no        2^128  Pollard rho on the secp256k1 group
+  total  : 2^288
+  verdict: The chain cannot be run backwards. Both backward steps are infeasible, and they must both be solved: the cheaper one alone is already about 2^128 operations.
+
+Prefix analysis (base58check)
+  observed prefix : 1BEwWK
+  exact probability: 3.853e-09
+  constrained bits : 28
+  naive alphabet^-k: 1.524e-09
+  verdict          : no significance claim: the prefix was chosen after seeing the address
+  note             : Every address has a prefix, and this one fixes 28 bit(s) of the payload. That still cannot be a p-value, because the prefix was picked after seeing the address. Pass one you declared in advance to test it.
+
+Safety audit (grade: no-known-hazard)
+Severity  Code      What it means
+--------  --------  -----------------
+ok        checksum  checksum verifies
+  unspendable      : no
+  anyone can spend : no
+  verdict          : No documented hazard applies to this output. That is not a guarantee: only the key holder can prove spendability by producing a signature.
+
+Investigation plan (5 leads)
+Effort      Lead                   Question                                              Needs
+----------  ---------------------  ----------------------------------------------------  ---------------------------------------
+none        prefix_economics       Could this prefix have been mined on purpose?         nothing: the cost is measurable
+seconds     controlled_experiment  Does a public key I already hold own this address?    that public key
+minutes     extended_key           Does this address belong to a wallet I can identify?  the wallet's extended public key
+minutes     chain_data             What has this address received and spent?             a UTXO export you produce yourself
+infeasible  private_key            What is the private key behind this address?          a HASH160 preimage, then a discrete log
+  summary: 4 lead(s) can be acted on with public data you may already hold, and 1 question(s) are mathematically closed. Key recovery is not among the leads because it is not an open problem: it is a wall. The highest-yield first step is testing a key you already hold.
+  prefix_economics       -> binarycryptolab estimate-mining 1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa
+  controlled_experiment  -> binarycryptolab dissect-address 1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa --public-key <HEX>
+  extended_key           -> binarycryptolab dissect-address 1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa --xpub <XPUB> --index-range 0:100
+  chain_data             -> binarycryptolab audit-address-data 1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa --input-file export.json
+
+Closed questions
+  - If the output is ever spent and its public key becomes public, the remaining barrier becomes the p2pkh discrete logarithm, about 2^128 classical operations.
+
+Caveats
+  - Costs are operation counts for the best publicly known classical algorithms, not wall-clock promises: hardware assumptions change the constant, never the exponent.
+  - Grover's algorithm lowers a 2^160 preimage search to about 2^80 quantum operations, which is still infeasible and requires a fault-tolerant machine that does not exist.
+  - Shor's algorithm would solve the discrete logarithm in polynomial time on a large fault-tolerant quantum computer. No such machine exists at the required scale, and published resource estimates remain contested. If one were built, secp256k1 would fail outright rather than degrade.
+  - RIPEMD-160 collision resistance is weaker than its preimage resistance; this asymmetry is why the hash step is quoted at 2^160 and not at the collision bound.
+
+Notes
+  - Only public data is analysed. No key material is present in an address.
+  - The checksum was recomputed independently, not just compared.
+  - The scriptPubKey shown is the one this output pays to; no chain data is read.
+  - The randomness battery tests the payload as a bit string. A hash should look random, so failures indicate padding or construction, not weakness of the key.
+  - The same version byte is registered on several chains, so the chain is reported as a set rather than a fact.
+
+Limitations
+  - An address does not reveal its public key, and the report never claims one.
+  - Ownership, balance, and history require chain data; audit-address-data can read a file you supply yourself, but this command reads nothing.
+  - Structural statistics describe the payload, not the security of the generator that produced the key behind it.
+  - A clean report does not prove the output is safe to receive funds at.
+
+Warnings:
+  - An address is not a public key; no key material is derived or claimed.
+  - Ownership, balance, and history require chain data. This tool reads none.

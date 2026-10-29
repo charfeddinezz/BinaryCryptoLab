@@ -131,6 +131,10 @@ and is refused with that explanation, because it would need the private key.
 | "Balance needs a blockchain" | **reduced** | `audit-address-data` audits an export you supply |
 | "A clean report does not prove safety" | **reduced** | the audit enumerates known hazards explicitly |
 | Only four derivations in the controlled experiment | **removed** | Taproot key-path derivation added |
+| "A script hash is opaque without the script" | **reduced** | `recover-script` enumerates the closed standard catalogue over your own keys |
+| "A prefix is described, never priced" | **removed** | `estimate-mining`: exact bits, measured rate, expected time |
+| "Two addresses cannot be related" | **removed** | `compare-addresses`: reuse, nesting, shared bits |
+| "The report ends with no next step" | **removed** | the investigation plan, ranked by effort |
 | "No key can be recovered from an address" | **irreducible** | that is the property being measured |
 | "Ownership needs a signature" | **irreducible** | the tool never handles private keys |
 | "No network, so no chain state" | **by design** | a network call would break the offline guarantee |
@@ -173,3 +177,53 @@ Carlo prefix mathematics.
 | Bech32 prefix probability | `2^-bits` equals the naive `32^-k` exactly, as it must, because the alphabet is `2^5` |
 | CashAddr prefix probability | the fixed 8-bit version byte is why 3 characters cost 12 bits, not 15 |
 | Base58 prefix probability | exact count agrees with a 200 000-address Monte Carlo |
+
+## 8. The v1.7.0 target: `1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa`
+
+This address is the standing test case: a clean, unremarkable mainnet P2PKH. It is
+used in every release to check that the tool's *ceiling* has actually moved and its
+*honesty* has not.
+
+### What the four new commands return for it
+
+| Command | Result | Status |
+| --- | --- | --- |
+| `dissect-address` | P2PKH, payload `70542a0b...fecc`, checksum valid, 159 significant bits, 8/8 randomness tests pass, 0 findings, `2^288` | unchanged facts, new plan section |
+| `estimate-mining` | prefix `1BEwWK` = **28 bits**, `2.596e8` attempts, **1.8 days** at the measured 1,662/s, `259.6 ms` at 1e9/s, verdict **cheap** | new |
+| `recover-script` | miss against two test keys: *"not derived from any of them"* | new, and the miss is honest |
+| `compare-addresses` | 0 relations among 3 addresses | new |
+| investigation plan | 5 leads (1 infeasible), 1 closed question | new |
+
+### Why the misses are results, not failures
+
+The address fixes 159 significant payload bits on top of a 24-bit version/network
+byte, and the backward chain is `2^160` for a HASH160 preimage *followed by* `2^128`
+for the secp256k1 discrete logarithm. No command in this project changes an exponent.
+
+So "the project succeeds" is defined here as: **every fact that public data can
+yield has been produced, every remaining question has a named cost, and the one
+question that cannot be answered is labelled with its cost in bits rather than
+hidden.** That is what the plan section prints.
+
+### Reproducing the v1.7.0 run
+
+```bash
+T=1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa
+binarycryptolab dissect-address $T
+binarycryptolab estimate-mining $T
+binarycryptolab recover-script $T --candidate-key 0279be66... --candidate-key 03c6047f...
+binarycryptolab compare-addresses $T 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH 3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy
+```
+
+Archived output: `demo_output/address_1BEwWKUg/v17/`.
+
+### What the new code rests on
+
+| Claim | Independent check |
+| --- | --- |
+| a recovered script is byte-exact | the address is derived *from* the script in the test, so a wrong hash cannot pass |
+| a 2-of-3 is found at attempt 18 | the enumeration order is asserted, not observed once |
+| an exhausted budget is inconclusive | the test forces a tiny budget and asserts the *inconclusive* wording |
+| the mining rate is real | every iteration performs an actual P2PKH derivation; the count is asserted against the elapsed time |
+| 28 bits for `1BEwWK` | the exact Base58 integer count agrees with the naive estimate to within the documented factor, and the bit count is checked by the same model used in v1.6.0 |
+| `same_payload` is not `shared_bits` | the code `continue`s after a payload match, so a pair never reports both |

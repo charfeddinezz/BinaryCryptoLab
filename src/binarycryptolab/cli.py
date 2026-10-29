@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Final
 
 from ._version import __version__
+from .address_compare import AddressComparison, compare_addresses
 from .address_forensics import (
     AddressDissection,
     ControlledExperiment,
@@ -71,9 +72,11 @@ from .key_reconstruction import (
     parse_template,
     solve_template,
 )
+from .mining import MiningEstimate, estimate_prefix_mining
 from .models.analysis_result import REDACTED, AnalysisResult
 from .reports import render_csv, render_json, write_csv, write_json
 from .reports._io import atomic_write_text, resolve_target
+from .script_recovery import CandidateKey, ScriptRecovery, recover_script
 from .utils.formatting import (
     abbreviate,
     format_bit_row,
@@ -485,6 +488,88 @@ def build_parser() -> argparse.ArgumentParser:
             "network request is made; the data is never trusted, only audited."
         ),
     )
+    recover_command = subparsers.add_parser(
+        "recover-script",
+        help="recover the redeem script behind an address from candidate public keys",
+        description=(
+            "Enumerate every standard script the supplied public keys can produce "
+            "(P2PK, every m-of-n multisig subset, CLTV timelocks, HTLC) and check which "
+            "one hashes to the address. A match recovers the spending conditions "
+            "exactly; a miss is reported with the catalogue's limits."
+        ),
+    )
+    recover_command.add_argument("address", help="the address to analyse")
+    recover_command.add_argument(
+        "--candidate-key",
+        action="append",
+        default=[],
+        metavar="HEX",
+        help="a public key you plausibly control (repeatable, up to 15)",
+    )
+    recover_command.add_argument(
+        "--hash-lock",
+        action="append",
+        default=[],
+        metavar="HASH160",
+        help="a 20-byte HASH160 digest to try in HTLC templates (repeatable)",
+    )
+    recover_command.add_argument(
+        "--timelock",
+        action="append",
+        type=int,
+        default=[],
+        metavar="N",
+        help="a CLTV height or time to try in timelock templates (repeatable)",
+    )
+    recover_command.add_argument(
+        "--max-candidates",
+        type=int,
+        default=20_000,
+        metavar="N",
+        help="budget on enumerated scripts (default 20000)",
+    )
+    _add_report_options(recover_command, flag="--report-format")
+    recover_command.set_defaults(handler=_cmd_recover_script)
+
+    compare_command = subparsers.add_parser(
+        "compare-addresses",
+        help="relate a set of addresses: reuse, nesting, shared bits",
+        description=(
+            "Find structural relations between addresses: the same payload in two "
+            "encodings, one address wrapping another's script, or long shared bit "
+            "sequences with an exact probability."
+        ),
+    )
+    compare_command.add_argument("address", nargs="+", help="two or more addresses")
+    _add_report_options(compare_command, flag="--report-format")
+    compare_command.set_defaults(handler=_cmd_compare_addresses)
+
+    mining_command = subparsers.add_parser(
+        "estimate-mining",
+        help="price a vanity prefix in attempts and in measured wall-clock time",
+        description=(
+            "Convert a prefix into constrained bits with the exact counting model, "
+            "then measure this machine's derivation rate and report the expected time, "
+            "from 1e3 to 1e12 attempts per second."
+        ),
+    )
+    mining_command.add_argument("address", help="an address fixing the encoding and version")
+    mining_command.add_argument(
+        "--prefix",
+        default=None,
+        metavar="PREFIX",
+        help="the prefix to price (default: the address's own six characters)",
+    )
+    mining_command.add_argument(
+        "--iterations",
+        type=int,
+        default=256,
+        metavar="N",
+        help="benchmark derivations, 1..5000 (default 256)",
+    )
+    _add_report_options(mining_command, flag="--report-format")
+    mining_command.set_defaults(handler=_cmd_estimate_mining)
+
     audit_data_command.add_argument("address", help="the address the export describes")
     audit_data_command.add_argument(
         "--input-file",
@@ -1930,6 +2015,33 @@ def _render_address_dissection_text(
             ]
         )
 
+    plan = dissection.plan
+    lines.extend(
+        [
+            "",
+            f"Investigation plan ({len(plan.leads)} leads)",
+            format_table(
+                ("Effort", "Lead", "Question", "Needs"),
+                [
+                    (
+                        lead.effort,
+                        lead.code,
+                        abbreviate(lead.question, 52),
+                        abbreviate(lead.needs, 40),
+                    )
+                    for lead in plan.leads
+                ],
+            ),
+            f"  summary: {plan.summary}",
+        ]
+    )
+    for lead in plan.leads:
+        if lead.command:
+            lines.append(f"  {lead.code:22s} -> {lead.command}")
+    lines.append("")
+    lines.append("Closed questions")
+    lines.extend(f"  - {item}" for item in plan.closed)
+
     lines.extend(["", "Caveats"])
     lines.extend(f"  - {caveat}" for caveat in dissection.hardness.caveats)
     lines.append("")
@@ -2296,6 +2408,264 @@ def _cmd_audit_address_data(args: argparse.Namespace) -> int:
         )
         return _emit_batch(text, output=args.output, overwrite=args.overwrite)
     return _emit_batch(_render_utxo_audit_text(audit), output=args.output, overwrite=args.overwrite)
+
+
+def _render_recovery_text(report: ScriptRecovery) -> str:
+    """Render a script-recovery report as text."""
+    lines = [
+        "script recovery",
+        "===============",
+        "",
+        format_table(
+            ("Field", "Value"),
+            [
+                ("address", report.address),
+                ("type", report.address_type),
+                ("candidate keys", str(len(report.candidate_keys))),
+                ("candidates tested", str(report.attempts)),
+                ("budget exhausted", "yes" if report.truncated else "no"),
+                ("recovered", "YES" if report.recovered else "no"),
+            ],
+        ),
+        "",
+        "Candidate keys",
+        format_table(
+            ("#", "Key", "Label", "HASH160"),
+            [
+                (str(index + 1), abbreviate(key.public_key_hex, 22), key.label, key.hash160)
+                for index, key in enumerate(report.candidate_keys)
+            ],
+        ),
+        "",
+    ]
+    if report.matches:
+        lines.append("Recovered scripts")
+        lines.append(
+            format_table(
+                ("Template", "Summary", "Script", "Keys"),
+                [
+                    (
+                        match.template,
+                        match.summary,
+                        abbreviate(match.script_hex, 40),
+                        ", ".join(match.keys_used),
+                    )
+                    for match in report.matches
+                ],
+            )
+        )
+        for match in report.matches:
+            lines.append("")
+            lines.append(f"  full script : {match.script_hex}")
+    elif report.key_matches:
+        lines.append("Key-level match")
+        lines.extend(
+            f"  - {key.label}: {key.public_key_hex} hashes to the payload"
+            for key in report.key_matches
+        )
+    else:
+        lines.append("No match: none of the enumerated scripts or keys reproduces the address")
+    lines.extend(["", f"Verdict: {report.verdict}", "", "Notes"])
+    lines.extend(f"  - {note}" for note in report.notes)
+    lines.extend(
+        [
+            "",
+            "Warnings:",
+            "  - Only supplied public keys were hashed; no private key was generated or guessed.",
+            "  - A miss excludes the catalogue, not every possible script.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _cmd_recover_script(args: argparse.Namespace) -> int:
+    keys = [
+        CandidateKey(value, label=f"candidate #{index + 1}")
+        for index, value in enumerate(args.candidate_key)
+    ]
+    report = recover_script(
+        args.address,
+        keys,
+        timelock_values=tuple(args.timelock),
+        hash_locks=tuple(args.hash_lock),
+        max_candidates=args.max_candidates,
+    )
+    _LOGGER.info("script recovery completed")
+    if args.report_format == "json":
+        text = json.dumps(report.as_dict(), indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+    if args.report_format == "csv":
+        rows = [
+            {
+                "template": match.template,
+                "summary": match.summary,
+                "script_hex": match.script_hex,
+                "matched": "yes" if match.matched else "no",
+                "keys_used": "; ".join(match.keys_used),
+            }
+            for match in report.matches
+        ] or [{"template": "", "summary": "", "script_hex": "", "matched": "none", "keys_used": ""}]
+        text = _render_csv_rows(("template", "summary", "script_hex", "matched", "keys_used"), rows)
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+    return _emit_batch(_render_recovery_text(report), output=args.output, overwrite=args.overwrite)
+
+
+def _render_comparison_text_two(result: AddressComparison) -> str:
+    """Render an address comparison as text."""
+    lines = [
+        "address comparison",
+        "==================",
+        "",
+        format_table(
+            ("#", "Address", "Type", "Payload"),
+            [
+                (str(index + 1), abbreviate(addr, 40), kind, payload)
+                for index, (addr, kind, payload) in enumerate(
+                    zip(result.addresses, result.types, result.payloads, strict=True)
+                )
+            ],
+        ),
+        "",
+        f"Pairs examined: {result.pair_count}",
+        "",
+        f"Relations ({len(result.relations)})",
+    ]
+    if result.relations:
+        lines.append(
+            format_table(
+                ("Kind", "Left", "Right", "Evidence", "p"),
+                [
+                    (
+                        relation.kind,
+                        abbreviate(relation.left, 18),
+                        abbreviate(relation.right, 18),
+                        abbreviate(relation.evidence, 44),
+                        "-" if relation.probability is None else f"{relation.probability:.3e}",
+                    )
+                    for relation in result.relations
+                ],
+            )
+        )
+        lines.append("")
+        for relation in result.relations:
+            lines.append(f"  {relation.kind}: {relation.explanation}")
+    else:
+        lines.append("  none: the payloads are unrelated at this resolution")
+    lines.extend(["", f"Verdict: {result.verdict}", "", "Notes"])
+    lines.extend(f"  - {note}" for note in result.notes)
+    lines.extend(
+        [
+            "",
+            "Warnings:",
+            "  - A shared payload is reuse, not a shared owner.",
+            "  - Two addresses from different keys are expected to show no relation.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _cmd_compare_addresses(args: argparse.Namespace) -> int:
+    result = compare_addresses(args.address)
+    _LOGGER.info("address comparison completed")
+    if args.report_format == "json":
+        text = json.dumps(result.as_dict(), indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+    if args.report_format == "csv":
+        rows = [
+            {
+                "kind": relation.kind,
+                "left": relation.left,
+                "right": relation.right,
+                "evidence": relation.evidence,
+                "probability": "" if relation.probability is None else f"{relation.probability:g}",
+            }
+            for relation in result.relations
+        ]
+        text = _render_csv_rows(("kind", "left", "right", "evidence", "probability"), rows)
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+    return _emit_batch(
+        _render_comparison_text_two(result), output=args.output, overwrite=args.overwrite
+    )
+
+
+def _render_mining_text(estimate: MiningEstimate) -> str:
+    """Render a mining estimate as text."""
+    measured = estimate.measured
+    lines = [
+        "prefix mining estimate",
+        "======================",
+        "",
+        format_table(
+            ("Field", "Value"),
+            [
+                ("prefix", estimate.prefix),
+                ("encoding", estimate.encoding),
+                ("constrained bits", str(estimate.constrained_bits)),
+                ("exact probability", f"{estimate.probability:.3e}"),
+                ("expected attempts", f"{estimate.expected_attempts:.3e}"),
+                ("difficulty (x 2^32)", f"{estimate.difficulty:.3e}"),
+            ],
+        ),
+        "",
+        "Measured on this machine",
+        format_table(
+            ("Field", "Value"),
+            [
+                ("derivation type", measured.address_type),
+                ("iterations", str(measured.iterations)),
+                ("elapsed", f"{measured.elapsed_seconds:.4f} s"),
+                ("rate", f"{measured.per_second:,.0f} per second"),
+                ("time per attempt", f"{measured.seconds_per_attempt * 1e6:.1f} microseconds"),
+                ("expected wall clock", f"{estimate.expected_seconds_measured:,.0f} s"),
+            ],
+        ),
+        "",
+        "Expected time by attack rate",
+        format_table(
+            ("Attempts per second", "Seconds", "Human"),
+            [
+                (f"{rate:.0e}", f"{seconds:.3e}", human)
+                for rate, seconds, human in estimate.rate_table
+            ],
+        ),
+        "",
+        f"Verdict: {estimate.verdict}",
+        "",
+        "Notes",
+    ]
+    lines.extend(f"  - {note}" for note in estimate.notes)
+    lines.extend(
+        [
+            "",
+            "Warnings:",
+            "  - This is an estimate, not a mining service: no prefix was searched for.",
+            "  - A cheap prefix proves nothing about the address's origin.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _cmd_estimate_mining(args: argparse.Namespace) -> int:
+    from .mining import benchmark_derivation
+
+    rate = benchmark_derivation(iterations=args.iterations)
+    estimate = estimate_prefix_mining(args.address, prefix=args.prefix, rate=rate)
+    _LOGGER.info("prefix mining estimated")
+    if args.report_format == "json":
+        text = json.dumps(estimate.as_dict(), indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+    if args.report_format == "csv":
+        rows = [
+            {
+                "attempts_per_second": f"{rate_value:.0e}",
+                "seconds": f"{seconds:.3e}",
+                "human": human,
+            }
+            for rate_value, seconds, human in estimate.rate_table
+        ]
+        text = _render_csv_rows(("attempts_per_second", "seconds", "human"), rows)
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+    return _emit_batch(_render_mining_text(estimate), output=args.output, overwrite=args.overwrite)
 
 
 # ---------------------------------------------------------------------------

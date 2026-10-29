@@ -4,6 +4,59 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-10-29
+
+### Added
+
+* **`binarycryptolab.script_recovery`** - recover a script from a hash, honestly:
+  * `CandidateKey` accepts a public key, a hash of one, or a raw script, and the
+    rejections for private material are the same as everywhere else in the package;
+  * `enumerate_candidate_scripts` builds the closed catalogue that actually occurs in
+    the wild for a set of candidate keys: P2PK, every `m`-of-`n` subset of the
+    candidate keys (including the 1-of-n and n-of-n degenerate cases), CLTV/CSV
+    timelocks over P2PK and P2PKH branches, and HTLCs over hash locks;
+  * `recover_script` hashes each candidate and compares it to the address payload, so a
+    hit is a byte-exact proof and a miss is reported as *"not derived from any of
+    the supplied candidates"* - never as proof that no script exists;
+  * an explicit attempt budget returns `truncated=True`, and the verdict then says
+    *inconclusive* rather than negative.
+  * Verified behaviours: a 2-of-3 P2SH is recovered in 18 attempts, a P2WSH is
+    recovered, a P2PKH matches at the key level, and P2SH(P2WPKH) nesting is
+    recognised instead of being rebuilt as a plain script.
+* **`binarycryptolab.mining`** - the economics of a prefix, measured rather than
+  assumed:
+  * `benchmark_derivation` times real P2PKH derivation on the machine that runs it
+    (**1,687 addresses/s** on the development host, 128 iterations);
+  * `estimate_prefix_mining` converts a constrained-bit count into expected attempts,
+    an embedded-rate table (10^3 to 10^12 per second), and a four-grade verdict;
+  * `verify_prefix_claim` checks that an address really does start with the prefix
+    somebody claims, so the estimate is never computed against a typo.
+* **`binarycryptolab.address_compare`** - relate two addresses by evidence:
+  `same_address`, `same_payload` (cross-chain reuse - the same key material behind two
+  different networks), `nested_script` (P2SH(P2WPKH), P2SH(P2WSH)), and `shared_bits`
+  with the exact `2^-k` probability of a coincidental run.
+* **`binarycryptolab.investigation`** - an **investigation plan** instead of a dead end.
+  `build_plan` ranks every remaining lead by effort (`none`, `seconds`, `minutes`,
+  `infeasible`), states for each one *what it would prove* and *what it would not*, and
+  lists the questions that are already **closed**. `AddressDissection.plan` exposes it,
+  `as_dict()` carries it under `plan`, and `dissect-address` renders it as
+  *Investigation plan* with copy-pasteable commands.
+* **Three new subcommands** with text, JSON, and CSV output:
+  `recover-script`, `compare-addresses`, and `estimate-mining`.
+* 74 new tests (1392 total), including the honest-miss wording, the truncated-budget
+  verdict, and the plan ordering.
+
+### Changed
+
+* `AddressDissection.as_dict()` gained a `plan` key; the round-trip test was updated
+  to expect it.
+
+### Notes
+
+* Nothing in this release weakens the guarantees of earlier ones: no network access,
+  no key recovery, no ownership claims. The plan makes the boundary explicit by
+  naming the one lead that is genuinely infeasible and saying why, in bits.
+
 ## [1.6.0] - 2026-10-28
 
 ### Added

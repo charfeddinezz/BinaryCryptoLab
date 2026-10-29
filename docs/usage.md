@@ -55,6 +55,9 @@ COMMAND
   assemble-private-key  assemble a scalar from known hex digits plus a bounded search
   compare-keys        compare a set of public keys and detect related scalars
   dissect-address     dissect addresses, URIs, and scripts into public facts
+  recover-script      match an address against every script your keys could produce
+  compare-addresses   find relations between addresses (reuse, nesting, shared bits)
+  estimate-mining     price a prefix in bits, attempts, and measured time
   audit-address-data  audit a UTXO export you supply, offline
 ```
 
@@ -678,6 +681,96 @@ Every report prints the constrained bit count, so a probability that underflows 
 * **A prefix noticed after the fact is not evidence.** Without `--claimed-prefix`
   the corrected probability is `1.0` and the verdict says so.
 
+## recover-script
+
+```bash
+# which of these scripts is behind the address?
+binarycryptolab recover-script 36toL... \
+    --candidate-key 02e1... --candidate-key 03ab... --candidate-key 02ff...
+
+# add hash locks and timelocks, and bound the enumeration
+binarycryptolab recover-script 36toL... --candidate-key 02e1... --candidate-key 03ab... \
+    --hash-lock 751e76e8199196d454941c45d1b3a323f1433bd6 --timelock 800000 \
+    --max-candidates 5000 --report-format json
+```
+
+`dissect-address` tells you that a P2SH or P2WSH payload is a hash with no visible
+structure. `recover-script` closes that gap without guessing wildly: it builds the
+**closed catalogue of scripts that actually occur**, hashes each one, and compares.
+
+| Family | What is enumerated |
+| --- | --- |
+| P2PK | `<key> OP_CHECKSIG` for each candidate key |
+| Multisig | every `m`-of-`n` subset of the candidate keys, `1 <= m <= n` |
+| Timelock | `<t> OP_CLTV OP_DROP <key> OP_CHECKSIG`, and the P2PKH-branch form |
+| HTLC | hash lock plus a refund branch, over every supplied `--hash-lock` |
+
+The catalogue is *closed*, which fixes the meaning of both outcomes:
+
+* **hit** - byte-exact proof of the spending conditions. The report prints the script,
+  the matching template, and the attempt index at which it was found (a 3-key 2-of-3
+  is found at attempt 18).
+* **miss** - the address is *not derived from any supplier candidate*. It is **not**
+  evidence that the script is non-standard, and the report says so explicitly.
+
+If the budget runs out the verdict becomes **inconclusive**, not negative, because the
+catalogue was never fully searched.
+
+P2SH(P2WPKH) and P2SH(P2WSH) are detected as nesting rather than rebuilt, because the
+inner script of a nested address is a hash of a *key*, not a script template.
+
+## compare-addresses
+
+```bash
+binarycryptolab compare-addresses 1GeM... 3J98... 36toL... bc1q...
+binarycryptolab compare-addresses bitcoin:1GeM... bitcoincash:qpm2... --report-format json
+```
+
+| Relation | Meaning | How it is proven |
+| --- | --- | --- |
+| `same_address` | the same string, re-encoded | canonical form and checksum |
+| `same_payload` | the same 20 or 32 bytes on two different networks | byte equality of the payload |
+| `nested_script` | one address wraps the other's script (P2SH→P2WPKH, P2SH→P2WSH) | `HASH160`/`SHA256` of the inner script |
+| `shared_bits` | a run of identical bits, with `2^-k` coincidence probability | exact bit comparison |
+
+`same_payload` is the interesting one in practice: a Bitcoin and a Bitcoin Cash address
+sharing a payload means the **same key material** is published on two chains, so any
+future break of one exposes both. `shared_bits` between unrelated addresses is
+expected at some length and is reported with its probability so it cannot be
+over-read; it is suppressed when a stronger relation already explains the pair.
+
+## estimate-mining
+
+```bash
+binarycryptolab estimate-mining 1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa
+binarycryptolab estimate-mining 1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa --prefix 1BEwW --iterations 512
+```
+
+A striking prefix is the most common reason people suspect a "vanity" key. This
+command answers with arithmetic instead of intuition:
+
+1. **counts the constrained bits** with the encoding-specific model (Base58Check
+   integers, Bech32 bits, CashAddr's unaligned version byte);
+2. **measures this machine** with `benchmark_derivation` - a real P2PKH derivation per
+   iteration, so the number is not a guess (**1,662-1,687/s** on the development
+   host, varying with load);
+3. **prices** the expected attempts at 10^3, 10^6, 10^9, and 10^12 attempts per
+   second, and gives a graded verdict.
+
+```text
+prefix             1BEwWK
+constrained bits   28
+expected attempts  2.596e+08
+at measured rate   1.8 days at this machine's measured rate
+at 1e6 attempts/s  4.3 min
+at 1e9 attempts/s  259.6 ms
+verdict            cheap
+```
+
+`--prefix` is checked against the address with `verify_prefix_claim`, so a typo
+produces an error rather than a meaningless estimate. 28 bits is **cheap**: it is
+minutes of GPU time, which is exactly why a fancy prefix is weak evidence of anything.
+
 ## audit-address-data
 
 ```bash
@@ -811,6 +904,38 @@ from binarycryptolab.reports import write_json, write_csv
 
 write_json(analyze("binary", "101101"), "reports/binary.json")
 write_csv(analyze("binary", "101101"), "reports/binary.csv")
+```
+
+Recovery, relations, mining economics, and the plan:
+
+```python
+from binarycryptolab.address_compare import compare_addresses
+from binarycryptolab.address_forensics import dissect_address
+from binarycryptolab.investigation import build_plan
+from binarycryptolab.mining import estimate_prefix_mining
+from binarycryptolab.script_recovery import CandidateKey, recover_script
+
+keys = [
+    CandidateKey("0279be66...", label="my cold key"),
+    CandidateKey("03c6047f...", label="cosigner"),
+]
+recovery = recover_script("36toL...", keys)
+print(recovery.recovered, recovery.attempts)  # True 18
+print(recovery.verdict)  # states the match, or that it is not derived from these keys
+
+comparison = compare_addresses(["1GeM...", "bitcoincash:qpm2..."])
+for relation in comparison.relations:
+    print(relation.kind, relation.explanation)  # same_payload ...
+
+estimate = estimate_prefix_mining("1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa")
+print(estimate.constrained_bits)   # 28
+print(estimate.expected_attempts)  # 259550703.19
+print(estimate.verdict)            # cheap: ...
+
+plan = build_plan(dissect_address("1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa"))
+print(plan.summary)
+print([lead.effort for lead in plan.leads])
+# ['none', 'seconds', 'minutes', 'minutes', 'infeasible']
 ```
 
 Hashing text with a defined encoding and converting hexadecimal text explicitly:

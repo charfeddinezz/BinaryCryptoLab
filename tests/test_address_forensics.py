@@ -303,6 +303,7 @@ class TestDissectAddress:
             "script_claim",
             "key_match",
             "recoverable",
+            "plan",
             "notes",
             "limitations",
         }

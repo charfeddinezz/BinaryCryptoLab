@@ -1,0 +1,22 @@
+{
+  "addresses": [
+    "1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa",
+    "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH"
+  ],
+  "notes": [
+    "Address comparison cannot relate two private keys: that is a discrete-log question, not a string question.",
+    "A shared payload on two networks is address reuse, which is a privacy and safety hazard, not evidence of a shared owner.",
+    "Absence of a relation is informative only at this resolution; addresses of different key pairs are expected to show none."
+  ],
+  "pair_count": 1,
+  "payloads": [
+    "70542a0b4e6776be4ba75e4d975ec8de3333fecc",
+    "751e76e8199196d454941c45d1b3a323f1433bd6"
+  ],
+  "relations": [],
+  "types": [
+    "p2pkh",
+    "p2pkh"
+  ],
+  "verdict": "no relation found among 1 pairs: the payloads are unrelated at the resolution this tool can see"
+}

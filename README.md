@@ -4,6 +4,12 @@
 statistics, hashing, secp256k1 public-key derivation, deep public-key forensics,
 and Bitcoin address encoding.**
 
+**What can be known about an address you did not create?** Its format, its exact
+bits, the cost of the backward chain, whether a key you already hold owns it, which
+script it commits to if you supply the candidate keys, how expensive its prefix is,
+and what the next step is. Not its private key, and not whether it holds funds.
+`dissect-address` ends with that remainder written down as a ranked plan.
+
 BinaryCryptoLab is built for learning, teaching, auditing, and experimentation.
 It validates its input strictly, delegates cryptography to maintained libraries,
 and produces deterministic JSON/CSV reports. It never contacts the network,
@@ -75,6 +81,28 @@ never stores private keys, and never attempts to recover anyone's key.
   64-digit scalar - verified against the public key, redacted by default.
 - **Key-set comparison**: nibble agreement, shared prefixes and suffixes, pairwise
   Hamming distances, and provable small scalar offsets between keys.
+
+### Recovery, relations, and an investigation plan
+
+- **`recover-script`** enumerates the closed catalogue of standard scripts your own
+  public keys could produce (P2PK, every `m`-of-`n` subset, CLTV timelocks, HTLCs),
+  hashes each one, and matches the address. A hit is a byte-exact proof of the
+  spending conditions; a miss says *"not derived from any of them"*, which is a
+  statement about the catalogue and never about the world. An exhausted budget is
+  reported as **inconclusive**, not negative.
+- **`compare-addresses`** relates two addresses by evidence rather than resemblance:
+  the same payload across two networks (key reuse - a privacy hazard, not a shared
+  owner), one address wrapping the other's script, or a run of shared bits with its
+  exact `2^-k` coincidence probability.
+- **`estimate-mining`** prices a prefix: exact constrained bits, a **measured**
+  derivation rate on the machine you are using, the expected attempts, and the time at
+  10^3 through 10^12 attempts per second, with a graded verdict. A 28-bit prefix is
+  minutes of GPU time, so a fancy prefix is not evidence of anything.
+- **An investigation plan instead of a dead end.** `dissect-address` now ends with a
+  ranked list of every remaining lead (`none` -> `infeasible`), what each would prove,
+  what it would not, the copy-pasteable command, and the questions that are
+  **mathematically closed**. The one infeasible lead is named as such, with its cost
+  in bits, so the boundary of what is knowable is explicit rather than implied.
 
 ### Interfaces and reports
 
@@ -614,12 +642,17 @@ BinaryCryptoLab/
   بالمعادلات والأرقام المقاسة.
 - [Security](docs/security.md) — threat model, non-goals, and safe-use
   checklist.
+- [Address scenarios](docs/address_scenarios.md) — every input, every output, and
+  which limitations were removed, reduced, or are irreducible.
 - [Usage](docs/usage.md) — complete CLI reference and Python API examples.
 
 ## Known limitations
 
 - A scalar can only be assembled from knowledge you supply; a public key alone
   yields nothing (discrete logarithm), and windows above 40 bits are refused.
+- `recover-script` searches a **finite catalogue** of standard templates. A miss
+  rules out those scripts for those keys, not every possible script; an exhausted
+  budget is inconclusive rather than negative.
 - Only P2PKH, P2WPKH, and P2SH-P2WPKH addresses are **derived**. Generic P2SH,
   P2WSH, and Taproot-style outputs can be decoded and validated but not created.
 - No WIF encoding, BIP-32/39 derivation, signing, PSBT, or keystore support.

@@ -1210,6 +1210,17 @@ class AddressDissection:
         """Always ``False``: an address cannot yield its key."""
         return False
 
+    @property
+    def plan(self) -> Any:
+        """Return the investigation plan for this dissection.
+
+        The import is local so that ``investigation`` can depend on this module
+        without a cycle at import time.
+        """
+        from .investigation import build_plan
+
+        return build_plan(self)
+
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable representation."""
         return {
@@ -1248,6 +1259,7 @@ class AddressDissection:
             "script_claim": None if self.script_claim is None else self.script_claim.as_dict(),
             "key_match": None if self.key_match is None else self.key_match.as_dict(),
             "recoverable": self.recoverable,
+            "plan": self.plan.as_dict(),
             "notes": list(self.notes),
             "limitations": list(self.limitations),
         }

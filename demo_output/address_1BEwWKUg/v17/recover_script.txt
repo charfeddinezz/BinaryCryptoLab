@@ -1,0 +1,31 @@
+script recovery
+===============
+
+Field              Value
+-----------------  ----------------------------------
+address            1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa
+type               p2pkh
+candidate keys     2
+candidates tested  2
+budget exhausted   no
+recovered          no
+
+Candidate keys
+#  Key                     Label         HASH160
+-  ----------------------  ------------  ----------------------------------------
+1  0279be667...5b16f81798  candidate #1  751e76e8199196d454941c45d1b3a323f1433bd6
+2  03c6047f9...b95c709ee5  candidate #2  ee6120575db94b9efdd9c7f56212b23e7ff6e56f
+
+No match: none of the enumerated scripts or keys reproduces the address
+
+Verdict: none of the 2 supplied keys hashes to this p2pkh payload, so the address is not derived from any of them
+
+Notes
+  - The search is a finite catalogue of standard templates, not a proof of absence.
+  - No private key was generated, guessed, or derived; only supplied public keys were hashed.
+  - A recovered script states the spending conditions, not who can satisfy them.
+  - For P2PKH/P2WPKH the committed object is a key hash, so the test is a direct comparison with each candidate key, not a script enumeration.
+
+Warnings:
+  - Only supplied public keys were hashed; no private key was generated or guessed.
+  - A miss excludes the catalogue, not every possible script.

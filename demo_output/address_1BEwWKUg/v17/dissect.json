@@ -1,0 +1,325 @@
+{
+  "address": "1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa",
+  "base58_leading_ones": 1,
+  "chain": "bitcoin",
+  "chain_ambiguous": true,
+  "chain_candidates": [
+    "bitcoin",
+    "bitcoin_cash"
+  ],
+  "checksum_hex": "e5fae25f",
+  "checksum_valid": true,
+  "encoding": "base58check",
+  "findings": [],
+  "hardness": {
+    "caveats": [
+      "Costs are operation counts for the best publicly known classical algorithms, not wall-clock promises: hardware assumptions change the constant, never the exponent.",
+      "Grover's algorithm lowers a 2^160 preimage search to about 2^80 quantum operations, which is still infeasible and requires a fault-tolerant machine that does not exist.",
+      "Shor's algorithm would solve the discrete logarithm in polynomial time on a large fault-tolerant quantum computer. No such machine exists at the required scale, and published resource estimates remain contested. If one were built, secp256k1 would fail outright rather than degrade.",
+      "RIPEMD-160 collision resistance is weaker than its preimage resistance; this asymmetry is why the hash step is quoted at 2^160 and not at the collision bound."
+    ],
+    "steps": [
+      {
+        "cost_log2": 0.0,
+        "feasible": true,
+        "method": "Base58Check, Bech32, Bech32m, or CashAddr decoding",
+        "note": "Reversible by definition: the encoding is public and lossless.",
+        "step": "input -> version/payload/checksum"
+      },
+      {
+        "cost_log2": 160.0,
+        "feasible": false,
+        "method": "preimage of RIPEMD160(SHA256(.)) over 256-bit inputs",
+        "note": "A preimage of the specific digest is required. Collision attacks are cheaper but useless here: a colliding value does not unlock this output.",
+        "step": "payload -> public key"
+      },
+      {
+        "cost_log2": 128.0,
+        "feasible": false,
+        "method": "Pollard rho on the secp256k1 group",
+        "note": "About 2^128 group operations with constant memory. No index calculus or special algorithm is known for prime-order curves.",
+        "step": "public key -> private scalar"
+      }
+    ],
+    "total_cost_log2": 288.0,
+    "verdict": "The chain cannot be run backwards. Both backward steps are infeasible, and they must both be solved: the cheaper one alone is already about 2^128 operations."
+  },
+  "human_readable_part": null,
+  "input_kind": "address",
+  "key_match": null,
+  "leading_zero_bytes": 1,
+  "limitations": [
+    "An address does not reveal its public key, and the report never claims one.",
+    "Ownership, balance, and history require chain data; audit-address-data can read a file you supply yourself, but this command reads nothing.",
+    "Structural statistics describe the payload, not the security of the generator that produced the key behind it.",
+    "A clean report does not prove the output is safe to receive funds at."
+  ],
+  "network": "mainnet",
+  "network_ambiguous": false,
+  "notes": [
+    "Only public data is analysed. No key material is present in an address.",
+    "The checksum was recomputed independently, not just compared.",
+    "The scriptPubKey shown is the one this output pays to; no chain data is read.",
+    "The randomness battery tests the payload as a bit string. A hash should look random, so failures indicate padding or construction, not weakness of the key.",
+    "The same version byte is registered on several chains, so the chain is reported as a set rather than a fact."
+  ],
+  "payload_hex": "70542a0b4e6776be4ba75e4d975ec8de3333fecc",
+  "payload_length_bytes": 20,
+  "payload_profile": {
+    "bit_length": 159,
+    "byte_entropy": 4.1219280948873624,
+    "distinct_bytes": 18,
+    "hamming_p_value": 0.23558242646926975,
+    "hamming_weight": 88,
+    "hexadecimal": "70542a0b4e6776be4ba75e4d975ec8de3333fecc",
+    "label": "hash160",
+    "leading_zero_bits": 1,
+    "nibble_frequency": [
+      [
+        "e",
+        6
+      ],
+      [
+        "7",
+        5
+      ],
+      [
+        "3",
+        4
+      ],
+      [
+        "4",
+        4
+      ],
+      [
+        "5",
+        3
+      ],
+      [
+        "b",
+        3
+      ],
+      [
+        "c",
+        3
+      ],
+      [
+        "0",
+        2
+      ],
+      [
+        "6",
+        2
+      ],
+      [
+        "a",
+        2
+      ],
+      [
+        "d",
+        2
+      ],
+      [
+        "2",
+        1
+      ],
+      [
+        "8",
+        1
+      ],
+      [
+        "9",
+        1
+      ],
+      [
+        "f",
+        1
+      ]
+    ]
+  },
+  "plan": {
+    "address": "1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa",
+    "closed": [
+      "If the output is ever spent and its public key becomes public, the remaining barrier becomes the p2pkh discrete logarithm, about 2^128 classical operations."
+    ],
+    "leads": [
+      {
+        "available": true,
+        "code": "prefix_economics",
+        "command": "binarycryptolab estimate-mining 1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa",
+        "does_not_prove": "that anyone actually did mine it",
+        "effort": "none",
+        "needs": "nothing: the cost is measurable",
+        "proves": "the expected work in attempts, and the wall-clock time at this machine's measured rate",
+        "question": "Could this prefix have been mined on purpose?"
+      },
+      {
+        "available": false,
+        "code": "controlled_experiment",
+        "command": "binarycryptolab dissect-address 1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa --public-key <HEX>",
+        "does_not_prove": "that the coins are still there, or that a signature exists",
+        "effort": "seconds",
+        "needs": "that public key",
+        "proves": "exact ownership of the address by that key",
+        "question": "Does a public key I already hold own this address?"
+      },
+      {
+        "available": false,
+        "code": "extended_key",
+        "command": "binarycryptolab dissect-address 1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa --xpub <XPUB> --index-range 0:100",
+        "does_not_prove": "ownership by anyone else, or the balance",
+        "effort": "minutes",
+        "needs": "the wallet's extended public key",
+        "proves": "the derivation index, and therefore that the wallet owns it",
+        "question": "Does this address belong to a wallet I can identify?"
+      },
+      {
+        "available": false,
+        "code": "chain_data",
+        "command": "binarycryptolab audit-address-data 1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa --input-file export.json",
+        "does_not_prove": "that the export is complete or current: the tool is offline",
+        "effort": "minutes",
+        "needs": "a UTXO export you produce yourself",
+        "proves": "that the export matches this script, and its arithmetic",
+        "question": "What has this address received and spent?"
+      },
+      {
+        "available": false,
+        "code": "private_key",
+        "command": null,
+        "does_not_prove": "everything: this is the question the tool refuses to pretend to answer",
+        "effort": "infeasible",
+        "needs": "a HASH160 preimage, then a discrete log",
+        "proves": "nothing, because neither step can be run",
+        "question": "What is the private key behind this address?"
+      }
+    ],
+    "summary": "4 lead(s) can be acted on with public data you may already hold, and 1 question(s) are mathematically closed. Key recovery is not among the leads because it is not an open problem: it is a wall. The highest-yield first step is testing a key you already hold."
+  },
+  "randomness": {
+    "alpha": 0.01,
+    "bit_entropy": 0.9927744539878083,
+    "bit_entropy_corrected": 0.9972828759905863,
+    "bits_used": 160,
+    "bonferroni_p_value": 0.979722575187798,
+    "failed_tests": [],
+    "familywise_pass": true,
+    "fisher_p_value": 0.2738477111731177,
+    "minimum_p_value": 0.13996036788397115,
+    "notes": [
+      "7 tests share the same 160 bits, so their p-values are dependent: Fisher's combination is optimistic and the Bonferroni bound is conservative.",
+      "With this many tests, a p-value below 0.01 arises by chance in roughly one run in fourteen; a single borderline result is not evidence.",
+      "Absence of a failed test does not prove randomness: these tests cannot detect a generator that is cryptographically weak but statistically well behaved."
+    ],
+    "tests": [
+      {
+        "detail": "88 ones / 72 zeros, |S|/sqrt(n) = 1.2649",
+        "explanation": "Checks whether ones and zeros appear equally often. A failure means the balance is unusual, which biased generators produce.",
+        "name": "monobit",
+        "p_value": 0.20590321073206833,
+        "passed": true,
+        "statistic": 1.2649110640673518
+      },
+      {
+        "detail": "83 runs (expected 79.20), z = 0.4291",
+        "explanation": "Checks the oscillation rate between zeros and ones. Failures suggest clustering, alternation, or a short repeating period.",
+        "name": "runs",
+        "p_value": 0.6678181719364533,
+        "passed": true,
+        "statistic": 0.42914435931814277
+      },
+      {
+        "detail": "longest run of ones = 9 of 160 bits",
+        "explanation": "A very long run of ones is rare in fair coin tosses; it appears in padded, truncated, or low-entropy material.",
+        "name": "longest_run",
+        "p_value": 0.13996036788397115,
+        "passed": true,
+        "statistic": 9.0
+      },
+      {
+        "detail": "rho = -0.03535, z = -0.4472",
+        "explanation": "Measures linear dependence between neighbouring bits. Strong correlation points at a counter, a shift register, or repeated bytes.",
+        "name": "serial_correlation",
+        "p_value": 0.6547373177222269,
+        "passed": true,
+        "statistic": -0.03535353535353535
+      },
+      {
+        "detail": "ApEn(2) = 0.678269 nats, chi2 = 4.7610 on 4 df",
+        "explanation": "Compares how often short patterns repeat against the fair-coin prediction. Low values mean the material is too predictable.",
+        "name": "approximate_entropy",
+        "p_value": 0.31271484402817995,
+        "passed": true,
+        "statistic": 0.6782691694088974
+      },
+      {
+        "detail": "chi2 = 16.0000 on 15 df over 40 nibbles",
+        "explanation": "Checks that all sixteen hexadecimal digits appear at the expected rate. A failure indicates padded, repeated, or hand-written bytes.",
+        "name": "nibble_uniformity",
+        "p_value": 0.3820516615028645,
+        "passed": true,
+        "statistic": 16.0
+      },
+      {
+        "detail": "18 distinct byte values in 20 bytes (expected 19.27), exact p = 1.589e-01",
+        "explanation": "Too few distinct values means repetition or padding; too many is almost impossible by chance. Up to one observation per bin the p-value is computed exactly from the occupancy distribution, because a chi-square approximation would break the expected-count rule; longer inputs use a normal approximation with exact moments.",
+        "name": "distinct_bytes",
+        "p_value": 0.15891283803065798,
+        "passed": true,
+        "statistic": 18.0
+      }
+    ]
+  },
+  "recomputed_checksum_hex": "e5fae25f",
+  "recoverable": false,
+  "safety": {
+    "anyone_can_spend": false,
+    "checks": [
+      {
+        "code": "checksum",
+        "detail": "The checksum was recomputed locally and matches the encoding.",
+        "evidence": "base58check",
+        "severity": "ok",
+        "title": "checksum verifies"
+      }
+    ],
+    "grade": "no-known-hazard",
+    "known_address": null,
+    "notes": [
+      "An address is public data: it is safe to share and unsafe to trust.",
+      "Every check in this audit is offline and deterministic; none of it proves ownership, balance, or that coins were ever sent.",
+      "A clean audit is the absence of known hazards, not evidence of safety."
+    ],
+    "safe_to_share": true,
+    "taproot": null,
+    "unspendable": false,
+    "verdict": "No documented hazard applies to this output. That is not a guarantee: only the key holder can prove spendability by producing a signature."
+  },
+  "scale": {
+    "address_bits": 160,
+    "note": "The address fixes a 160-bit digest, which leaves about 2^96 public keys consistent with it (2^256 points, 2^160 digests). It fixes zero bits of the private scalar.",
+    "public_key_candidates_log2": 96.0,
+    "scalar_bits_known": 0.0,
+    "scalar_bits_total": 256,
+    "scalar_bits_unknown": 256.0
+  },
+  "script_asm": "OP_DUP OP_HASH160 70542a0b4e6776be4ba75e4d975ec8de3333fecc OP_EQUALVERIFY OP_CHECKSIG",
+  "script_claim": null,
+  "script_pubkey_hex": "76a91470542a0b4e6776be4ba75e4d975ec8de3333fecc88ac",
+  "taproot": null,
+  "type": "p2pkh",
+  "uri_params": [],
+  "vanity": {
+    "claimed_in_advance": false,
+    "constrained_bits": 28,
+    "corrected_probability": 1.0,
+    "encoding": "base58check",
+    "naive_probability": 1.5235616493254474e-09,
+    "note": "Every address has a prefix, and this one fixes 28 bit(s) of the payload. That still cannot be a p-value, because the prefix was picked after seeing the address. Pass one you declared in advance to test it.",
+    "prefix": "1BEwWK",
+    "probability": 3.852811753971464e-09,
+    "verdict": "no significance claim: the prefix was chosen after seeing the address"
+  },
+  "version_byte": 0,
+  "witness_version": null
+}
