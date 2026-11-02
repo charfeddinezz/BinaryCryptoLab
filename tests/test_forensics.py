@@ -816,6 +816,7 @@ class TestSerialization:
             "randomness",
             "findings",
             "forecast",
+            "glv",
             "notes",
         }
         assert set(payload["public_key"]) == {

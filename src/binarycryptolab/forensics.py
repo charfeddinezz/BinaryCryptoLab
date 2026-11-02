@@ -807,6 +807,19 @@ class PublicKeyDissection:
         """The ``y`` coordinate profile."""
         return self.coordinates[1]
 
+    @property
+    def glv(self) -> Any:
+        """The GLV endomorphism verification for this key.
+
+        Computed on first access so that the common report path does not pay for
+        three extra scalar multiplications.  The endomorphism is a property of
+        secp256k1 itself, so the checks always pass for a valid key; they verify the
+        arithmetic, not the key, and :mod:`binarycryptolab.glv` says so.
+        """
+        from .glv import verify_glv
+
+        return verify_glv(self.compressed_hex)
+
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable representation of the whole dissection."""
         return {
@@ -834,6 +847,7 @@ class PublicKeyDissection:
             "randomness": self.randomness.as_dict(),
             "findings": [finding.as_dict() for finding in self.findings],
             "forecast": self.forecast.as_dict(),
+            "glv": self.glv.as_dict(),
             "notes": list(self.notes),
         }
 

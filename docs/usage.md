@@ -58,6 +58,8 @@ COMMAND
   recover-script      match an address against every script your keys could produce
   compare-addresses   find relations between addresses (reuse, nesting, shared bits)
   estimate-mining     price a prefix in bits, attempts, and measured time
+  glv-check           verify the secp256k1 GLV endomorphism on a public key
+  analyze-segments    cut bytes into 8/16/32/64-bit words and fold them with XOR
   audit-address-data  audit a UTXO export you supply, offline
 ```
 
@@ -771,6 +773,91 @@ verdict            cheap
 produces an error rather than a meaningless estimate. 28 bits is **cheap**: it is
 minutes of GPU time, which is exactly why a fancy prefix is weak evidence of anything.
 
+## glv-check
+
+```bash
+binarycryptolab glv-check 0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798
+binarycryptolab glv-check 04... --report-format json
+```
+
+secp256k1 has an endomorphism ``phi(x, y) = (beta*x, y)`` that acts exactly like
+multiplication by a scalar ``lambda``. The GLV method uses it to split one
+256-bit scalar multiplication into two 128-bit ones. The identity is *checkable*,
+so this command checks it rather than quoting it:
+
+| Check | What is compared |
+| --- | --- |
+| `beta_is_cube_root_of_unity` | `beta^3 mod p`, and that `beta != 1` |
+| `lambda_is_primitive_cube_root` | `(lambda^2 + lambda + 1) mod n`, and that `lambda != 1` |
+| `endomorphism_matches_lambda_on_generator` | `phi(G)` against `lambda * G` |
+| `phi_point_on_curve` / `phi_squared_on_curve` | the images satisfy `y^2 = x^3 + 7` |
+| `phi_equals_lambda` | `phi(P)` against `lambda * P` for **your** key |
+| `phi_is_not_identity` | that the orbit has three distinct points |
+| `sum_is_infinity` | `P + phi(P) + phi^2(P) = O` |
+
+```text
+phi(P)             02bcace2e99da01887ab0102b696902325872844067f15e98da7bba04400b88fcb
+phi^2(P)           02c994b69768832bcbff5e9ab39ae8d1d3763bbf1e531bed98fe51de5ee84f50fb
+lambda * P         02bcace2e99da01887ab0102b696902325872844067f15e98da7bba04400b88fcb
+all checks         pass
+three-torsion sum  O
+```
+
+**Read the label on the section: "curve property, not a key property".** Every valid
+secp256k1 key passes all eight checks, so the result says nothing about who generated
+the key. The only practical consequence is a factor of two in the *constant* of a
+discrete-log attack: 2^128 becomes about 2^127 operations. The exponent does not move.
+
+Two independent implementations have to agree for this command to be trustworthy:
+the point arithmetic comes from `curve_arithmetic` (cross-checked against OpenSSL in
+the test suite), and `lambda * G` is additionally re-derived through `cryptography`
+as an ordinary key derivation. The test asserts the two encodings are identical.
+
+## analyze-segments
+
+```bash
+binarycryptolab analyze-segments 70542a0b4e6776be4ba75e4d975ec8de3333fecc
+binarycryptolab analyze-segments 0000000011111111 --encoding binary --widths 8
+binarycryptolab analyze-segments 00112233 --widths 16 --lags 1,2 --report-format json
+```
+
+A frequency table smooths away exactly the mistakes this command looks for: a value
+repeating with a period, or a buffer whose halves mirror each other. So the data is
+cut into words at 8, 16, 32, and 64 bits and then folded.
+
+| Section | What it shows |
+| --- | --- |
+| Segments | every word, its hexadecimal, its big-endian integer value, and whether it filled the width |
+| Fold XOR | XOR of all the words at that width |
+| Adjacent XOR / differences | the same relation between neighbouring words |
+| Byte reversal | the input against its own reversal, plus their XOR |
+| Bit autocorrelation | agreement with a shifted copy at lags 1, 2, 3, 4, 8, 16 |
+| Balance | 1-degree-of-freedom chi-square for a fair-coin split, with a survival function |
+
+```text
+Width   Segments  Fold XOR            Complete  Reading
+------  --------  ------------------  --------  ---------
+8-bit   20        0xf6                yes       no signal
+16-bit  10        0xe513              yes       no signal
+32-bit  5         0xd1f934ea          yes       no signal
+64-bit  3         0x3bf37446ea0a40ac  no        no signal
+```
+
+Three rules, applied literally:
+
+* **A non-zero fold is the normal outcome.** It is printed anyway, because a report
+  that only prints exceptions invites the reader to treat silence as a signal.
+* **A zero fold is a 1-in-`2**width` coincidence.** With two segments it only means the
+  halves are equal; with three or more it is worth inspecting.
+* **A short tail is never padded silently.** A 160-bit digest cut into 64-bit words
+  yields two complete words and a 32-bit remainder, labelled incomplete, and that
+  width's fold is marked as mixing widths rather than presented as a test.
+
+`--segments` on `analyze-hex` and `analyze-binary` appends this same section, and the
+full report also lands under `extra.segmentation` in JSON exports. On
+`dissect-address` the payload is segmented automatically, compactly in text and in
+full in JSON.
+
 ## audit-address-data
 
 ```bash
@@ -936,6 +1023,20 @@ plan = build_plan(dissect_address("1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa"))
 print(plan.summary)
 print([lead.effort for lead in plan.leads])
 # ['none', 'seconds', 'minutes', 'minutes', 'infeasible']
+```
+
+The endomorphism and the segmentation view are plain functions:
+
+```python
+from binarycryptolab import segmentation_report, verify_glv
+
+report = verify_glv("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+print(report.verified, report.three_torsion)  # True True
+print(report.phi_hex)  # 02bcace2e99da01887ab0102b696902325872844067f15e98da7bba04400b88fcb
+
+segments = segmentation_report(bytes.fromhex("70542a0b4e6776be4ba75e4d975ec8de3333fecc"))
+print([(w.width, w.fold_xor_hex) for w in segments.widths])
+print(segments.zero_folds, segments.reversal.is_palindrome)  # () False
 ```
 
 Hashing text with a defined encoding and converting hexadecimal text explicitly:

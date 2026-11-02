@@ -4,6 +4,68 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-10-30
+
+### Added
+
+* **`binarycryptolab.glv`** - the secp256k1 GLV endomorphism, verified instead of
+  asserted:
+  * the two constants are checked against the curve itself (`beta^3 = 1 mod p`, and
+    `lambda^2 + lambda + 1 = 0 mod n`), so a corrupted constant cannot pass;
+  * ``phi(P) = (beta*x, y)`` is compared with ``lambda * P`` for the supplied key
+    **and** for the generator;
+  * ``P + phi(P) + phi^2(P)`` is verified to be the point at infinity, which is the
+    relation that ties the three orbit points together;
+  * the module performs no curve arithmetic of its own: it uses
+    :mod:`binarycryptolab.curve_arithmetic`, which is cross-checked against OpenSSL
+    in the test suite.  ``phi(G) = lambda * G`` is additionally re-derived through
+    ``cryptography`` as an ordinary key derivation, so the two libraries must agree.
+  * the report states, in the report itself, that **GLV is a property of the curve,
+    not of the key**: it halves the constant of a discrete-log attack (2^128 becomes
+    about 2^127 operations) and moves no exponent.
+* **`binarycryptolab.segmentation`** - cut the bytes into 8-, 16-, 32-, and 64-bit
+  words and look for structure that a frequency table hides:
+  * per-width segment tables with big-endian integer values;
+  * the XOR fold of every width, with a 1-in-``2**width`` reading for a zero fold
+    and the honest statement that a **non-zero fold is the normal outcome**;
+  * adjacent XORs and adjacent differences, explicitly labelled descriptive (no null
+    distribution, no p-value);
+  * the input against its own byte reversal, including the XOR of the two;
+  * bit autocorrelation at lags 1, 2, 3, 4, 8, and 16, plus a 1-degree-of-freedom
+    balance chi-square with a real survival function.
+  * a short tail is reported as incomplete rather than silently padded, so a 160-bit
+    digest cut into 64-bit words is not mixed with 32-bit values.
+* **Wiring, not a side script** - the new capabilities are reachable from three
+  existing surfaces:
+  * `dissect-public-key` gained a **GLV endomorphism** section, backed by a lazy
+    ``PublicKeyDissection.glv`` property and a ``glv`` key in ``as_dict()``;
+  * `dissect-address` gained a **payload segmentation** section (compact in text,
+    complete in JSON) backed by ``AddressDissection.segmentation``;
+  * `analyze-hex` and `analyze-binary` gained ``--segments``, which appends the same
+    segmentation section and stores the full report under ``extra.segmentation`` in
+    JSON exports.
+* **Two new subcommands**, each with text, JSON, and CSV output: ``glv-check`` and
+  ``analyze-segments`` (``--encoding hex|binary``, ``--widths``, ``--lags``).
+* ``verify_glv`` and ``segmentation_report`` are exported from the package root.
+* 84 new tests (1476 total), including the endomorphism identities, the
+  OpenSSL cross-check of ``lambda * G``, the incomplete-tail rule, and the wording
+  of the honest negative result.
+
+### Changed
+
+* ``PublicKeyDissection.as_dict()`` gained a ``glv`` key and
+  ``AddressDissection.as_dict()`` gained a ``segmentation`` key; the two round-trip
+  tests were updated to expect them.
+
+### Notes
+
+* The endomorphism section is a **verification of arithmetic**, not a finding about
+  a key: it passes for every valid secp256k1 key by construction, and the report says
+  so before it shows a single number.
+* A zero fold is a 1-in-``2**width`` coincidence, not evidence of weakness; a
+  non-zero fold carries no information and is printed anyway so that absence of a
+  signal cannot be mistaken for a signal.
+
 ## [1.7.0] - 2026-10-29
 
 ### Added

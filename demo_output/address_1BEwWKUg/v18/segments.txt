@@ -1,0 +1,106 @@
+segmentation analysis
+=====================
+
+Field               Value
+------------------  -------
+bytes               20
+bits                160
+ones / zeros        88 / 72
+transitions         82
+runs / longest run  83 / 9
+balance chi-square  1.6000
+balance p-value     0.2059
+palindrome          no
+
+8-bit segments (20)
+#   Hex  Value (decimal)  Bits  Complete
+--  ---  ---------------  ----  --------
+0   70   112              8     yes
+1   54   84               8     yes
+2   2a   42               8     yes
+3   0b   11               8     yes
+4   4e   78               8     yes
+5   67   103              8     yes
+6   76   118              8     yes
+7   be   190              8     yes
+8   4b   75               8     yes
+9   a7   167              8     yes
+10  5e   94               8     yes
+11  4d   77               8     yes
+12  97   151              8     yes
+13  5e   94               8     yes
+14  c8   200              8     yes
+15  de   222              8     yes
+16  33   51               8     yes
+17  33   51               8     yes
+18  fe   254              8     yes
+19  cc   204              8     yes
+  fold XOR : 0xf6
+  adjacent XOR : 24 7e 21 45 29 11 c8 f5 ec f9 13 da c9 96 16 ed 0 cd 32
+  adjacent diff: 28 42 31 -67 -25 -15 -72 115 -92 73 17 -74 57 -106 -22 171 0 -203 50
+  note: the segments do not fold to zero, which is the expected outcome for unrelated data
+
+16-bit segments (10)
+#  Hex   Value (decimal)  Bits  Complete
+-  ----  ---------------  ----  --------
+0  7054  28756            16    yes
+1  2a0b  10763            16    yes
+2  4e67  20071            16    yes
+3  76be  30398            16    yes
+4  4ba7  19367            16    yes
+5  5e4d  24141            16    yes
+6  975e  38750            16    yes
+7  c8de  51422            16    yes
+8  3333  13107            16    yes
+9  fecc  65228            16    yes
+  fold XOR : 0xe513
+  adjacent XOR : 5a5f 646c 38d9 3d19 15ea c913 5f80 fbed cdff
+  adjacent diff: 17993 -9308 -10327 11031 -4774 -14609 -12672 38315 -52121
+  note: the segments do not fold to zero, which is the expected outcome for unrelated data
+
+32-bit segments (5)
+#  Hex       Value (decimal)  Bits  Complete
+-  --------  ---------------  ----  --------
+0  70542a0b  1884563979       32    yes
+1  4e6776be  1315403454       32    yes
+2  4ba75e4d  1269259853       32    yes
+3  975ec8de  2539571422       32    yes
+4  3333fecc  859045580        32    yes
+  fold XOR : 0xd1f934ea
+  adjacent XOR : 3e335cb5 5c028f3 dcf99693 a46d3612
+  adjacent diff: 569160525 46143601 -1270311569 1680525842
+  note: the segments do not fold to zero, which is the expected outcome for unrelated data
+
+64-bit segments (3)
+#  Hex               Value (decimal)      Bits  Complete
+-  ----------------  -------------------  ----  --------
+0  70542a0b4e6776be  8094140658340034238  64    yes
+1  4ba75e4d975ec8de  5451429561300338910  64    yes
+2  3333fecc          859045580            32    no
+  fold XOR : 0x3bf37446ea0a40ac
+  adjacent XOR : 3bf37446d939be60 4ba75e4da46d3612
+  adjacent diff: 2642711097039695328 5451429560441293330
+  note: the last 64-bit segment is short, so this fold mixes widths; read it as descriptive, not as a test
+
+Byte reversal
+  original: 70542a0b4e6776be4ba75e4d975ec8de3333fecc
+  reversed: ccfe3333dec85e974d5ea74bbe76674e0b2a5470
+  XOR     : bcaa193890af282906f9f9062928af903819aabc
+
+Bit autocorrelation
+Lag  Matches  Compared  Ratio     Deviation from 0.5
+---  -------  --------  --------  ------------------
+1    77       159       0.484277  -0.015723
+2    71       158       0.449367  -0.050633
+3    80       157       0.509554  +0.009554
+4    89       156       0.570513  +0.070513
+8    81       152       0.532895  +0.032895
+16   63       144       0.437500  -0.062500
+
+Verdict: no width folds to zero, and the bit balance is consistent with a fair coin; this is the expected result for a digest or a key
+
+Notes
+  - A non-zero fold is the normal outcome; its absence of information is the point of printing it rather than only printing the exception.
+  - Adjacent XOR and adjacent differences are descriptive arithmetic, not tests: they have no null distribution and no p-value.
+  - With 160-256 bits the balance chi-square can only detect a gross imbalance; a large p-value is not proof of randomness.
+  - Autocorrelation at these lags is not independent of the bit-balance test; both read the same bits, so agreement between them is not extra evidence.

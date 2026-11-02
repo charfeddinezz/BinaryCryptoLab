@@ -1,0 +1,734 @@
+{
+  "autocorrelation": [
+    {
+      "comparisons": 159,
+      "deviation": -0.01572327044025157,
+      "lag": 1,
+      "matches": 77,
+      "ratio": 0.48427672955974843
+    },
+    {
+      "comparisons": 158,
+      "deviation": -0.050632911392405056,
+      "lag": 2,
+      "matches": 71,
+      "ratio": 0.44936708860759494
+    },
+    {
+      "comparisons": 157,
+      "deviation": 0.009554140127388533,
+      "lag": 3,
+      "matches": 80,
+      "ratio": 0.5095541401273885
+    },
+    {
+      "comparisons": 156,
+      "deviation": 0.07051282051282048,
+      "lag": 4,
+      "matches": 89,
+      "ratio": 0.5705128205128205
+    },
+    {
+      "comparisons": 152,
+      "deviation": 0.03289473684210531,
+      "lag": 8,
+      "matches": 81,
+      "ratio": 0.5328947368421053
+    },
+    {
+      "comparisons": 144,
+      "deviation": -0.0625,
+      "lag": 16,
+      "matches": 63,
+      "ratio": 0.4375
+    }
+  ],
+  "balance_chi_square": 1.6,
+  "balance_p_value": 0.2059032107320684,
+  "bit_length": 160,
+  "byte_length": 20,
+  "data_hex": "70542a0b4e6776be4ba75e4d975ec8de3333fecc",
+  "longest_run": 9,
+  "notes": [
+    "A non-zero fold is the normal outcome; its absence of information is the point of printing it rather than only printing the exception.",
+    "Adjacent XOR and adjacent differences are descriptive arithmetic, not tests: they have no null distribution and no p-value.",
+    "With 160-256 bits the balance chi-square can only detect a gross imbalance; a large p-value is not proof of randomness.",
+    "Autocorrelation at these lags is not independent of the bit-balance test; both read the same bits, so agreement between them is not extra evidence."
+  ],
+  "ones": 88,
+  "reversal": {
+    "is_palindrome": false,
+    "original_hex": "70542a0b4e6776be4ba75e4d975ec8de3333fecc",
+    "reversed_hex": "ccfe3333dec85e974d5ea74bbe76674e0b2a5470",
+    "xor_hex": "bcaa193890af282906f9f9062928af903819aabc"
+  },
+  "runs": 83,
+  "transitions": 82,
+  "verdict": "no width folds to zero, and the bit balance is consistent with a fair coin; this is the expected result for a digest or a key",
+  "widths": [
+    {
+      "adjacent_difference": [
+        {
+          "left": 0,
+          "right": 1,
+          "value": "28"
+        },
+        {
+          "left": 1,
+          "right": 2,
+          "value": "42"
+        },
+        {
+          "left": 2,
+          "right": 3,
+          "value": "31"
+        },
+        {
+          "left": 3,
+          "right": 4,
+          "value": "-67"
+        },
+        {
+          "left": 4,
+          "right": 5,
+          "value": "-25"
+        },
+        {
+          "left": 5,
+          "right": 6,
+          "value": "-15"
+        },
+        {
+          "left": 6,
+          "right": 7,
+          "value": "-72"
+        },
+        {
+          "left": 7,
+          "right": 8,
+          "value": "115"
+        },
+        {
+          "left": 8,
+          "right": 9,
+          "value": "-92"
+        },
+        {
+          "left": 9,
+          "right": 10,
+          "value": "73"
+        },
+        {
+          "left": 10,
+          "right": 11,
+          "value": "17"
+        },
+        {
+          "left": 11,
+          "right": 12,
+          "value": "-74"
+        },
+        {
+          "left": 12,
+          "right": 13,
+          "value": "57"
+        },
+        {
+          "left": 13,
+          "right": 14,
+          "value": "-106"
+        },
+        {
+          "left": 14,
+          "right": 15,
+          "value": "-22"
+        },
+        {
+          "left": 15,
+          "right": 16,
+          "value": "171"
+        },
+        {
+          "left": 16,
+          "right": 17,
+          "value": "0"
+        },
+        {
+          "left": 17,
+          "right": 18,
+          "value": "-203"
+        },
+        {
+          "left": 18,
+          "right": 19,
+          "value": "50"
+        }
+      ],
+      "adjacent_xor": [
+        {
+          "left": 0,
+          "right": 1,
+          "value": "36"
+        },
+        {
+          "left": 1,
+          "right": 2,
+          "value": "126"
+        },
+        {
+          "left": 2,
+          "right": 3,
+          "value": "33"
+        },
+        {
+          "left": 3,
+          "right": 4,
+          "value": "69"
+        },
+        {
+          "left": 4,
+          "right": 5,
+          "value": "41"
+        },
+        {
+          "left": 5,
+          "right": 6,
+          "value": "17"
+        },
+        {
+          "left": 6,
+          "right": 7,
+          "value": "200"
+        },
+        {
+          "left": 7,
+          "right": 8,
+          "value": "245"
+        },
+        {
+          "left": 8,
+          "right": 9,
+          "value": "236"
+        },
+        {
+          "left": 9,
+          "right": 10,
+          "value": "249"
+        },
+        {
+          "left": 10,
+          "right": 11,
+          "value": "19"
+        },
+        {
+          "left": 11,
+          "right": 12,
+          "value": "218"
+        },
+        {
+          "left": 12,
+          "right": 13,
+          "value": "201"
+        },
+        {
+          "left": 13,
+          "right": 14,
+          "value": "150"
+        },
+        {
+          "left": 14,
+          "right": 15,
+          "value": "22"
+        },
+        {
+          "left": 15,
+          "right": 16,
+          "value": "237"
+        },
+        {
+          "left": 16,
+          "right": 17,
+          "value": "0"
+        },
+        {
+          "left": 17,
+          "right": 18,
+          "value": "205"
+        },
+        {
+          "left": 18,
+          "right": 19,
+          "value": "50"
+        }
+      ],
+      "complete": true,
+      "fold_xor": "246",
+      "fold_xor_hex": "f6",
+      "note": "the segments do not fold to zero, which is the expected outcome for unrelated data",
+      "segment_count": 20,
+      "segments": [
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "70",
+          "index": 0,
+          "value": "112"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "54",
+          "index": 1,
+          "value": "84"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "2a",
+          "index": 2,
+          "value": "42"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "0b",
+          "index": 3,
+          "value": "11"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "4e",
+          "index": 4,
+          "value": "78"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "67",
+          "index": 5,
+          "value": "103"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "76",
+          "index": 6,
+          "value": "118"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "be",
+          "index": 7,
+          "value": "190"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "4b",
+          "index": 8,
+          "value": "75"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "a7",
+          "index": 9,
+          "value": "167"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "5e",
+          "index": 10,
+          "value": "94"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "4d",
+          "index": 11,
+          "value": "77"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "97",
+          "index": 12,
+          "value": "151"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "5e",
+          "index": 13,
+          "value": "94"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "c8",
+          "index": 14,
+          "value": "200"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "de",
+          "index": 15,
+          "value": "222"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "33",
+          "index": 16,
+          "value": "51"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "33",
+          "index": 17,
+          "value": "51"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "fe",
+          "index": 18,
+          "value": "254"
+        },
+        {
+          "bits": 8,
+          "complete": true,
+          "hex": "cc",
+          "index": 19,
+          "value": "204"
+        }
+      ],
+      "width_bits": 8
+    },
+    {
+      "adjacent_difference": [
+        {
+          "left": 0,
+          "right": 1,
+          "value": "17993"
+        },
+        {
+          "left": 1,
+          "right": 2,
+          "value": "-9308"
+        },
+        {
+          "left": 2,
+          "right": 3,
+          "value": "-10327"
+        },
+        {
+          "left": 3,
+          "right": 4,
+          "value": "11031"
+        },
+        {
+          "left": 4,
+          "right": 5,
+          "value": "-4774"
+        },
+        {
+          "left": 5,
+          "right": 6,
+          "value": "-14609"
+        },
+        {
+          "left": 6,
+          "right": 7,
+          "value": "-12672"
+        },
+        {
+          "left": 7,
+          "right": 8,
+          "value": "38315"
+        },
+        {
+          "left": 8,
+          "right": 9,
+          "value": "-52121"
+        }
+      ],
+      "adjacent_xor": [
+        {
+          "left": 0,
+          "right": 1,
+          "value": "23135"
+        },
+        {
+          "left": 1,
+          "right": 2,
+          "value": "25708"
+        },
+        {
+          "left": 2,
+          "right": 3,
+          "value": "14553"
+        },
+        {
+          "left": 3,
+          "right": 4,
+          "value": "15641"
+        },
+        {
+          "left": 4,
+          "right": 5,
+          "value": "5610"
+        },
+        {
+          "left": 5,
+          "right": 6,
+          "value": "51475"
+        },
+        {
+          "left": 6,
+          "right": 7,
+          "value": "24448"
+        },
+        {
+          "left": 7,
+          "right": 8,
+          "value": "64493"
+        },
+        {
+          "left": 8,
+          "right": 9,
+          "value": "52735"
+        }
+      ],
+      "complete": true,
+      "fold_xor": "58643",
+      "fold_xor_hex": "e513",
+      "note": "the segments do not fold to zero, which is the expected outcome for unrelated data",
+      "segment_count": 10,
+      "segments": [
+        {
+          "bits": 16,
+          "complete": true,
+          "hex": "7054",
+          "index": 0,
+          "value": "28756"
+        },
+        {
+          "bits": 16,
+          "complete": true,
+          "hex": "2a0b",
+          "index": 1,
+          "value": "10763"
+        },
+        {
+          "bits": 16,
+          "complete": true,
+          "hex": "4e67",
+          "index": 2,
+          "value": "20071"
+        },
+        {
+          "bits": 16,
+          "complete": true,
+          "hex": "76be",
+          "index": 3,
+          "value": "30398"
+        },
+        {
+          "bits": 16,
+          "complete": true,
+          "hex": "4ba7",
+          "index": 4,
+          "value": "19367"
+        },
+        {
+          "bits": 16,
+          "complete": true,
+          "hex": "5e4d",
+          "index": 5,
+          "value": "24141"
+        },
+        {
+          "bits": 16,
+          "complete": true,
+          "hex": "975e",
+          "index": 6,
+          "value": "38750"
+        },
+        {
+          "bits": 16,
+          "complete": true,
+          "hex": "c8de",
+          "index": 7,
+          "value": "51422"
+        },
+        {
+          "bits": 16,
+          "complete": true,
+          "hex": "3333",
+          "index": 8,
+          "value": "13107"
+        },
+        {
+          "bits": 16,
+          "complete": true,
+          "hex": "fecc",
+          "index": 9,
+          "value": "65228"
+        }
+      ],
+      "width_bits": 16
+    },
+    {
+      "adjacent_difference": [
+        {
+          "left": 0,
+          "right": 1,
+          "value": "569160525"
+        },
+        {
+          "left": 1,
+          "right": 2,
+          "value": "46143601"
+        },
+        {
+          "left": 2,
+          "right": 3,
+          "value": "-1270311569"
+        },
+        {
+          "left": 3,
+          "right": 4,
+          "value": "1680525842"
+        }
+      ],
+      "adjacent_xor": [
+        {
+          "left": 0,
+          "right": 1,
+          "value": "1043553461"
+        },
+        {
+          "left": 1,
+          "right": 2,
+          "value": "96479475"
+        },
+        {
+          "left": 2,
+          "right": 3,
+          "value": "3707344531"
+        },
+        {
+          "left": 3,
+          "right": 4,
+          "value": "2758620690"
+        }
+      ],
+      "complete": true,
+      "fold_xor": "3522770154",
+      "fold_xor_hex": "d1f934ea",
+      "note": "the segments do not fold to zero, which is the expected outcome for unrelated data",
+      "segment_count": 5,
+      "segments": [
+        {
+          "bits": 32,
+          "complete": true,
+          "hex": "70542a0b",
+          "index": 0,
+          "value": "1884563979"
+        },
+        {
+          "bits": 32,
+          "complete": true,
+          "hex": "4e6776be",
+          "index": 1,
+          "value": "1315403454"
+        },
+        {
+          "bits": 32,
+          "complete": true,
+          "hex": "4ba75e4d",
+          "index": 2,
+          "value": "1269259853"
+        },
+        {
+          "bits": 32,
+          "complete": true,
+          "hex": "975ec8de",
+          "index": 3,
+          "value": "2539571422"
+        },
+        {
+          "bits": 32,
+          "complete": true,
+          "hex": "3333fecc",
+          "index": 4,
+          "value": "859045580"
+        }
+      ],
+      "width_bits": 32
+    },
+    {
+      "adjacent_difference": [
+        {
+          "left": 0,
+          "right": 1,
+          "value": "2642711097039695328"
+        },
+        {
+          "left": 1,
+          "right": 2,
+          "value": "5451429560441293330"
+        }
+      ],
+      "adjacent_xor": [
+        {
+          "left": 0,
+          "right": 1,
+          "value": "4319924315219410528"
+        },
+        {
+          "left": 1,
+          "right": 2,
+          "value": "5451429561519388178"
+        }
+      ],
+      "complete": false,
+      "fold_xor": "4319924315501510828",
+      "fold_xor_hex": "3bf37446ea0a40ac",
+      "note": "the last 64-bit segment is short, so this fold mixes widths; read it as descriptive, not as a test",
+      "segment_count": 3,
+      "segments": [
+        {
+          "bits": 64,
+          "complete": true,
+          "hex": "70542a0b4e6776be",
+          "index": 0,
+          "value": "8094140658340034238"
+        },
+        {
+          "bits": 64,
+          "complete": true,
+          "hex": "4ba75e4d975ec8de",
+          "index": 1,
+          "value": "5451429561300338910"
+        },
+        {
+          "bits": 32,
+          "complete": false,
+          "hex": "3333fecc",
+          "index": 2,
+          "value": "859045580"
+        }
+      ],
+      "width_bits": 64
+    }
+  ],
+  "zero_folds": [],
+  "zeros": 72
+}

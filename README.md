@@ -82,6 +82,22 @@ never stores private keys, and never attempts to recover anyone's key.
 - **Key-set comparison**: nibble agreement, shared prefixes and suffixes, pairwise
   Hamming distances, and provable small scalar offsets between keys.
 
+### Curve endomorphism, segmentation, and word folds
+
+- **`glv-check`** verifies the secp256k1 endomorphism instead of quoting it:
+  `phi(P) = (beta*x, y)` against `lambda * P`, `beta^3 = 1 mod p`,
+  `lambda^2 + lambda + 1 = 0 mod n`, and `P + phi(P) + phi^2(P) = O`. The section
+  heading says what the result means: **a curve property, not a key property**.
+  Every valid key passes, and the only consequence is a factor of two in the
+  constant of a discrete-log attack (2^128 becomes about 2^127 operations).
+- **`analyze-segments`** cuts bytes into 8-, 16-, 32-, and 64-bit words, folds them
+  with XOR, compares the input with its own byte reversal, and autocorrelates the
+  bits at several lags. A non-zero fold is the normal outcome and is printed anyway,
+  so silence cannot be mistaken for a signal.
+- **Wired into the reports you already use**, not bolted on beside them:
+  `dissect-public-key` gained a GLV section, `dissect-address` segments the payload
+  automatically, and `analyze-hex` / `analyze-binary` accept `--segments`.
+
 ### Recovery, relations, and an investigation plan
 
 - **`recover-script`** enumerates the closed catalogue of standard scripts your own
@@ -653,6 +669,11 @@ BinaryCryptoLab/
 - `recover-script` searches a **finite catalogue** of standard templates. A miss
   rules out those scripts for those keys, not every possible script; an exhausted
   budget is inconclusive rather than negative.
+- The GLV section verifies arithmetic that holds for **every** secp256k1 key, so it
+  is not a finding about a particular key. It is evidence that the implementation is
+  correct, and nothing more.
+- Segmentation produces descriptive arithmetic, not tests: a non-zero fold has no
+  p-value because it has no null distribution, and the report says so.
 - Only P2PKH, P2WPKH, and P2SH-P2WPKH addresses are **derived**. Generic P2SH,
   P2WSH, and Taproot-style outputs can be decoded and validated but not created.
 - No WIF encoding, BIP-32/39 derivation, signing, PSBT, or keystore support.

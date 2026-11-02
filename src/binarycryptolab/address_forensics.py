@@ -1221,6 +1221,22 @@ class AddressDissection:
 
         return build_plan(self)
 
+    @property
+    def segmentation(self) -> Any:
+        """Return the word-segmentation view of the payload, or ``None``.
+
+        Computed on demand: it is pure integer arithmetic over bytes already in
+        memory, and it answers a different question from the frequency profile ---
+        whether the payload looks structured when cut into 8-, 16-, 32-, and 64-bit
+        words.  Outputs with no payload (``OP_RETURN``, unknown versions) have
+        nothing to segment.
+        """
+        from .segmentation import segmentation_report
+
+        if not self.payload_hex:
+            return None
+        return segmentation_report(bytes.fromhex(self.payload_hex))
+
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable representation."""
         return {
@@ -1259,6 +1275,7 @@ class AddressDissection:
             "script_claim": None if self.script_claim is None else self.script_claim.as_dict(),
             "key_match": None if self.key_match is None else self.key_match.as_dict(),
             "recoverable": self.recoverable,
+            "segmentation": None if self.segmentation is None else self.segmentation.as_dict(),
             "plan": self.plan.as_dict(),
             "notes": list(self.notes),
             "limitations": list(self.limitations),

@@ -1,0 +1,30 @@
+GLV endomorphism verification
+=============================
+curve property, not a key property
+
+Field              Value
+-----------------  ------------------------------------------------------------------
+public key         0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798
+phi(P)             02bcace2e99da01887ab0102b696902325872844067f15e98da7bba04400b88fcb
+phi^2(P)           02c994b69768832bcbff5e9ab39ae8d1d3763bbf1e531bed98fe51de5ee84f50fb
+lambda * P         02bcace2e99da01887ab0102b696902325872844067f15e98da7bba04400b88fcb
+all checks         pass
+three-torsion sum  O
+
+Code                                      Statement                                                 Result  Detail
+----------------------------------------  --------------------------------------------------------  ------  ----------------------------------------------------
+beta_is_cube_root_of_unity                beta^3 = 1 mod p, so phi i...l automorphism of the curve  pass    beta^3 mod p = 1
+lambda_is_primitive_cube_root             lambda^2 + lambda + 1 = 0 mod n, so lambda has order 3    pass    (lambda^2 + lambda + 1) mod n = 0
+endomorphism_matches_lambda_on_generator  phi(G) = lambda * G, which...e identity on the generator  pass    phi(G) and lambda*G comp... coordinate by coordinate
+phi_point_on_curve                        phi(P) satisfies the curve equation                       pass    phi(P) = 02bcace2e99da01...67f15e98da7bba04400b88fcb
+phi_squared_on_curve                      phi(phi(P)) satisfies the curve equation                  pass    phi^2(P) = 02c994b697688...e531bed98fe51de5ee84f50fb
+phi_equals_lambda                         phi(P) = lambda * P for the supplied point                pass    lambda*P = 02bcace2e99da...67f15e98da7bba04400b88fcb
+phi_is_not_identity                       the endomorphism actually moves this point                pass    phi(P) differs from P, s...has three distinct points
+sum_is_infinity                           P + phi(P) + phi^2(P) = O                                 pass    the three orbit points sum to the point at infinity
+
+Interpretation: GLV splits one 256-bit scalar multiplication into two 128-bit ones, so it saves roughly a factor of 2. A discrete-log attack quoted at 2^128 becomes about 2^127 operations: the exponent does not change, and the barrier does not move.
+
+Notes
+  - The endomorphism is a property of secp256k1, not of this key: every valid public key satisfies all of these checks, so the result carries no information about who generated the key or how.
+  - GLV accelerates a discrete-log search by roughly a factor of 2 in the constant, which leaves the 2^128 exponent unchanged. A speedup is not a break.
+  - No private scalar is used, derived, or searched for: every value here is computed from public coordinates and public curve constants.

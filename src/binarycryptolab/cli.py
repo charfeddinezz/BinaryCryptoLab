@@ -61,6 +61,7 @@ from .forensics import (
     dissect_many,
     dissect_public_key,
 )
+from .glv import GlvReport, verify_glv
 from .hashing import HashAlgorithm, hash_bytes
 from .hex_utils import hex_to_bytes
 from .key_reconstruction import (
@@ -77,6 +78,7 @@ from .models.analysis_result import REDACTED, AnalysisResult
 from .reports import render_csv, render_json, write_csv, write_json
 from .reports._io import atomic_write_text, resolve_target
 from .script_recovery import CandidateKey, ScriptRecovery, recover_script
+from .segmentation import SegmentationReport, segmentation_report
 from .utils.formatting import (
     abbreviate,
     format_bit_row,
@@ -176,6 +178,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="maximum number of bits accepted (default: 100000)",
     )
+    binary.add_argument(
+        "--segments",
+        action="store_true",
+        help="append the 8/16/32/64-bit segmentation and fold section",
+    )
     _add_report_options(binary, flag="--format")
     binary.set_defaults(handler=_cmd_analyze_binary)
 
@@ -195,6 +202,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--strict-hex",
         action="store_true",
         help="reject odd-length hexadecimal input instead of left-padding it",
+    )
+    hexadecimal.add_argument(
+        "--segments",
+        action="store_true",
+        help="append the 8/16/32/64-bit segmentation and fold section",
     )
     _add_report_options(hexadecimal, flag="--format")
     hexadecimal.set_defaults(handler=_cmd_analyze_hex)
@@ -570,6 +582,52 @@ def build_parser() -> argparse.ArgumentParser:
     _add_report_options(mining_command, flag="--report-format")
     mining_command.set_defaults(handler=_cmd_estimate_mining)
 
+    glv_command = subparsers.add_parser(
+        "glv-check",
+        help="verify the secp256k1 GLV endomorphism on a public key",
+        description=(
+            "Verify, point by point, that phi(P) = (beta*x, y) equals lambda*P, that "
+            "beta^3 = 1 mod p, that lambda^2 + lambda + 1 = 0 mod n, and that "
+            "P + phi(P) + phi^2(P) is the point at infinity. The endomorphism is a "
+            "property of the curve, not of the key, and the report says so."
+        ),
+    )
+    glv_command.add_argument("public_key", help="SEC 1 public key (compressed or uncompressed)")
+    _add_report_options(glv_command, flag="--report-format")
+    glv_command.set_defaults(handler=_cmd_glv_check)
+
+    segments_command = subparsers.add_parser(
+        "analyze-segments",
+        help="cut bytes into 8/16/32/64-bit words and fold them with XOR",
+        description=(
+            "Segment the data at each word width, fold the segments with XOR, list "
+            "adjacent XORs and differences, compare the input with its byte reversal, "
+            "and correlate the bits with themselves at several lags. A non-zero fold "
+            "is the normal outcome and is reported as such."
+        ),
+    )
+    segments_command.add_argument("input", help="hexadecimal or binary data")
+    segments_command.add_argument(
+        "--encoding",
+        choices=("hex", "binary"),
+        default="hex",
+        help="how to read the input (default: hex)",
+    )
+    segments_command.add_argument(
+        "--widths",
+        default=None,
+        metavar="LIST",
+        help="comma-separated word widths in bits (default: 8,16,32,64)",
+    )
+    segments_command.add_argument(
+        "--lags",
+        default=None,
+        metavar="LIST",
+        help="comma-separated bit lags for autocorrelation (default: 1,2,3,4,8,16)",
+    )
+    _add_report_options(segments_command, flag="--report-format")
+    segments_command.set_defaults(handler=_cmd_analyze_segments)
+
     audit_data_command.add_argument("address", help="the address the export describes")
     audit_data_command.add_argument(
         "--input-file",
@@ -833,15 +891,41 @@ def _render_decoded_address_text(result: AnalysisResult) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _attach_segmentation(
+    result: AnalysisResult,
+    payload: bytes,
+    renderer: Callable[[AnalysisResult], str],
+) -> Callable[[AnalysisResult], str]:
+    """Attach a segmentation section to an analysis result and wrap its renderer.
+
+    The report lands under ``extra['segmentation']`` so JSON exports carry it, and
+    the text renderer prints it after the usual sections.  Both paths read the same
+    object, so the two formats cannot disagree.
+    """
+    report = segmentation_report(payload)
+    result.extra["segmentation"] = report.as_dict()
+
+    def combined(inner: AnalysisResult) -> str:
+        text = renderer(inner)
+        if not text.endswith("\n"):
+            text += "\n"
+        return text + "\n" + _render_segmentation_text(report)
+
+    return combined
+
+
 def _cmd_analyze_binary(args: argparse.Namespace) -> int:
     result = analyze("binary", args.input, max_length=args.max_length)
+    renderer: Callable[[AnalysisResult], str] = _render_binary_text
+    if getattr(args, "segments", False) and result.binary is not None:
+        renderer = _attach_segmentation(result, bytes.fromhex(result.binary.bytes_hex), renderer)
     _LOGGER.info("binary analysis completed")
     return _emit(
         result,
         report_format=args.report_format,
         output=args.output,
         overwrite=args.overwrite,
-        renderer=_render_binary_text,
+        renderer=renderer,
     )
 
 
@@ -852,13 +936,18 @@ def _cmd_analyze_hex(args: argparse.Namespace) -> int:
         allow_odd_hex=not args.strict_hex,
         max_length=args.max_length,
     )
+    renderer: Callable[[AnalysisResult], str] = _render_hex_text
+    if getattr(args, "segments", False) and result.hexadecimal is not None:
+        renderer = _attach_segmentation(
+            result, bytes.fromhex(result.hexadecimal.bytes_hex), renderer
+        )
     _LOGGER.info("hexadecimal analysis completed")
     return _emit(
         result,
         report_format=args.report_format,
         output=args.output,
         overwrite=args.overwrite,
-        renderer=_render_hex_text,
+        renderer=renderer,
     )
 
 
@@ -1309,6 +1398,29 @@ def _render_forensics_text(result: AnalysisResult) -> str:
             )
         if mirror.get("note"):
             lines.append(f"  {mirror['note']}")
+
+    glv = _section(data, "glv")
+    if glv:
+        checks = _entries(glv, "checks")
+        lines.append("")
+        lines.append("GLV endomorphism (curve property, not a key property)")
+        lines.append(
+            format_table(
+                ("Check", "Statement", "Result"),
+                [
+                    (
+                        str(check.get("code", "")),
+                        abbreviate(str(check.get("statement", "")), 62),
+                        "pass" if check.get("passed") else "FAIL",
+                    )
+                    for check in checks
+                ],
+            )
+        )
+        lines.append(f"  phi(P)   : {glv.get('phi_hex', '')}")
+        lines.append(f"  phi^2(P) : {glv.get('phi_squared_hex', '')}")
+        lines.append(f"  verified : {'yes' if glv.get('verified') else 'no'}")
+        lines.append(f"  {glv.get('speedup_phrase', '')}")
 
     keyspace = _section(data, "keyspace")
     if keyspace:
@@ -1792,6 +1904,35 @@ def _render_address_dissection_text(
                 ),
             ]
         )
+
+    segments = dissection.segmentation
+    if segments is not None:
+        lines.append("")
+        lines.append("Payload segmentation (word folds)")
+        lines.append(
+            format_table(
+                ("Width", "Segments", "Fold XOR", "Complete", "Reading"),
+                [
+                    (
+                        f"{analysis.width}-bit",
+                        str(analysis.segment_count),
+                        f"0x{analysis.fold_xor_hex}",
+                        "yes" if analysis.complete else "no",
+                        "folds to zero"
+                        if analysis.complete
+                        and analysis.fold_xor == 0
+                        and analysis.segment_count > 1
+                        else "no signal",
+                    )
+                    for analysis in segments.widths
+                ],
+            )
+        )
+        lines.append(
+            f"  byte reversal: {'palindrome' if segments.reversal.is_palindrome else 'not a palindrome'}"
+            f"; balance p={segments.balance_p_value:.4g}"
+        )
+        lines.append(f"  {segments.verdict}")
 
     lines.append("")
     if dissection.randomness is None:
@@ -2666,6 +2807,207 @@ def _cmd_estimate_mining(args: argparse.Namespace) -> int:
         text = _render_csv_rows(("attempts_per_second", "seconds", "human"), rows)
         return _emit_batch(text, output=args.output, overwrite=args.overwrite)
     return _emit_batch(_render_mining_text(estimate), output=args.output, overwrite=args.overwrite)
+
+
+def _parse_widths(text: str | None, *, default: tuple[int, ...], label: str) -> tuple[int, ...]:
+    """Parse a comma-separated list of positive integers for --widths/--lags."""
+    if text is None:
+        return default
+    parts = [part.strip() for part in text.split(",") if part.strip()]
+    if not parts:
+        raise InputValidationError(f"{label} must list at least one integer")
+    values: list[int] = []
+    for part in parts:
+        try:
+            values.append(int(part, 10))
+        except ValueError:
+            raise InputValidationError(f"{label} entries must be integers, got {part!r}") from None
+    return tuple(values)
+
+
+def _render_segmentation_text(report: SegmentationReport) -> str:
+    """Render a segmentation report as aligned text."""
+    lines = [
+        "segmentation analysis",
+        "=====================",
+        "",
+        format_table(
+            ("Field", "Value"),
+            [
+                ("bytes", str(report.byte_length)),
+                ("bits", str(report.bit_length)),
+                ("ones / zeros", f"{report.ones} / {report.zeros}"),
+                ("transitions", str(report.transitions)),
+                ("runs / longest run", f"{report.runs} / {report.longest_run}"),
+                ("balance chi-square", f"{report.balance_chi_square:.4f}"),
+                ("balance p-value", f"{report.balance_p_value:.4g}"),
+                ("palindrome", "yes" if report.reversal.is_palindrome else "no"),
+            ],
+        ),
+    ]
+    for analysis in report.widths:
+        lines.append("")
+        lines.append(f"{analysis.width}-bit segments ({analysis.segment_count})")
+        lines.append(
+            format_table(
+                ("#", "Hex", "Value (decimal)", "Bits", "Complete"),
+                [
+                    (
+                        str(segment.index),
+                        segment.hex,
+                        str(segment.value),
+                        str(segment.bits),
+                        "yes" if segment.complete else "no",
+                    )
+                    for segment in analysis.segments
+                ],
+            )
+        )
+        lines.append(f"  fold XOR : 0x{analysis.fold_xor_hex}")
+        if analysis.adjacent_xor:
+            lines.append(
+                f"  adjacent XOR : {' '.join(f'{value:x}' for _, _, value in analysis.adjacent_xor)}"
+            )
+            lines.append(
+                "  adjacent diff: "
+                + " ".join(f"{value}" for _, _, value in analysis.adjacent_difference)
+            )
+        lines.append(f"  note: {analysis.note}")
+
+    lines.append("")
+    lines.append("Byte reversal")
+    lines.append(f"  original: {report.reversal.original_hex}")
+    lines.append(f"  reversed: {report.reversal.reversed_hex}")
+    lines.append(f"  XOR     : {report.reversal.xor_hex}")
+
+    lines.append("")
+    lines.append("Bit autocorrelation")
+    lines.append(
+        format_table(
+            ("Lag", "Matches", "Compared", "Ratio", "Deviation from 0.5"),
+            [
+                (
+                    str(item.lag),
+                    str(item.matches),
+                    str(item.comparisons),
+                    f"{item.ratio:.6f}",
+                    f"{item.deviation:+.6f}",
+                )
+                for item in report.autocorrelation
+            ],
+        )
+    )
+    lines.append("")
+    lines.append(f"Verdict: {report.verdict}")
+    lines.append("")
+    lines.append("Notes")
+    lines.extend(f"  - {note}" for note in report.notes)
+    return "\n".join(lines) + "\n"
+
+
+def _cmd_analyze_segments(args: argparse.Namespace) -> int:
+    if args.encoding == "binary":
+        data = binary_to_bytes(args.input)
+    else:
+        data = hex_to_bytes(args.input, allow_odd=True)
+    widths = _parse_widths(args.widths, default=(8, 16, 32, 64), label="--widths")
+    lags = _parse_widths(args.lags, default=(1, 2, 3, 4, 8, 16), label="--lags")
+    report = segmentation_report(data, widths=widths, lags=lags)
+    _LOGGER.info("segmentation analysis completed")
+    if args.report_format == "json":
+        text = json.dumps(report.as_dict(), indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+    if args.report_format == "csv":
+        rows = [
+            {
+                "width_bits": str(analysis.width),
+                "segment_index": str(segment.index),
+                "hex": segment.hex,
+                "value_decimal": str(segment.value),
+                "bits": str(segment.bits),
+                "complete": "yes" if segment.complete else "no",
+                "width_fold_xor": analysis.fold_xor_hex,
+            }
+            for analysis in report.widths
+            for segment in analysis.segments
+        ]
+        text = _render_csv_rows(
+            (
+                "width_bits",
+                "segment_index",
+                "hex",
+                "value_decimal",
+                "bits",
+                "complete",
+                "width_fold_xor",
+            ),
+            rows,
+        )
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+    return _emit_batch(
+        _render_segmentation_text(report), output=args.output, overwrite=args.overwrite
+    )
+
+
+def _render_glv_text(report: GlvReport) -> str:
+    """Render a GLV verification as aligned text."""
+    lines = [
+        "GLV endomorphism verification",
+        "=============================",
+        "curve property, not a key property",
+        "",
+        format_table(
+            ("Field", "Value"),
+            [
+                ("public key", report.public_key_hex),
+                ("phi(P)", report.phi_hex),
+                ("phi^2(P)", report.phi_squared_hex),
+                ("lambda * P", report.lambda_times_key_hex),
+                ("all checks", "pass" if report.verified else "FAIL"),
+                ("three-torsion sum", "O" if report.three_torsion else "not O"),
+            ],
+        ),
+        "",
+        format_table(
+            ("Code", "Statement", "Result", "Detail"),
+            [
+                (
+                    check.code,
+                    abbreviate(check.statement, 56),
+                    "pass" if check.passed else "FAIL",
+                    abbreviate(check.detail, 52),
+                )
+                for check in report.checks
+            ],
+        ),
+        "",
+        f"Interpretation: {report.speedup_phrase}",
+        "",
+        "Notes",
+    ]
+    lines.extend(f"  - {note}" for note in report.notes)
+    return "\n".join(lines) + "\n"
+
+
+def _cmd_glv_check(args: argparse.Namespace) -> int:
+    report = verify_glv(args.public_key)
+    _LOGGER.info("GLV verification completed")
+    if args.report_format == "json":
+        text = json.dumps(report.as_dict(), indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+    if args.report_format == "csv":
+        rows = [
+            {
+                "code": check.code,
+                "passed": "yes" if check.passed else "no",
+                "statement": check.statement,
+                "detail": check.detail,
+            }
+            for check in report.checks
+        ]
+        text = _render_csv_rows(("code", "passed", "statement", "detail"), rows)
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+    return _emit_batch(_render_glv_text(report), output=args.output, overwrite=args.overwrite)
 
 
 # ---------------------------------------------------------------------------

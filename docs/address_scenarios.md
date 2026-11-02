@@ -227,3 +227,35 @@ Archived output: `demo_output/address_1BEwWKUg/v17/`.
 | the mining rate is real | every iteration performs an actual P2PKH derivation; the count is asserted against the elapsed time |
 | 28 bits for `1BEwWK` | the exact Base58 integer count agrees with the naive estimate to within the documented factor, and the bit count is checked by the same model used in v1.6.0 |
 | `same_payload` is not `shared_bits` | the code `continue`s after a payload match, so a pair never reports both |
+
+## 9. The v1.8.0 additions, checked against the same target
+
+Two capabilities landed in 1.8.0, and neither of them changes a conclusion. That is
+the point: they close the gap between *quoting* a curve property and *verifying* it,
+and between "the payload looks random by frequency" and "the payload does not fold to
+zero at any word width".
+
+| Command | Result on the target / on a test key | What it establishes |
+| --- | --- | --- |
+| `dissect-address 1BEwWK...` | payload segmentation: folds `0xf6`, `0xe513`, `0xd1f934ea` at 8/16/32-bit; 64-bit cut has a short tail; not a palindrome; balance `p=0.2059` | no word-level structure, and the non-zero folds are reported as the normal outcome |
+| `glv-check` on `02 79be66...` | 8/8 checks pass, `phi(P) = lambda*P`, `P + phi(P) + phi^2(P) = O` | the arithmetic is correct; the label states the result is a curve property, not a key property |
+| `analyze-segments deadbeefdeadbeef --widths 32` | fold `0x00000000` | a real positive control: the tool *does* raise a signal when one exists |
+
+### Why the GLV result must not be read as a finding
+
+The eight checks pass for **every** valid secp256k1 public key, by construction. A
+report that presented them as a discovery would be lying by formatting. The section
+heading is therefore `GLV endomorphism (curve property, not a key property)`, and the
+sentence printed underneath says the exponent does not move.
+
+### Independent check of the check
+
+`phi(G) = lambda * G` is computed twice, by two different mechanisms:
+
+1. `curve_arithmetic.multiply(G, lambda)`, the analysis-grade arithmetic used for
+   bounded searches and cross-checked against OpenSSL elsewhere in the suite;
+2. `cryptography`'s ordinary key derivation, which can derive `lambda * G` because it
+   is a multiple of the generator.
+
+The test asserts the two hex strings are identical, so a bug in one library cannot
+produce a passing report on its own.

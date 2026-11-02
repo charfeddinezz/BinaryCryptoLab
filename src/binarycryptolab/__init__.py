@@ -30,8 +30,10 @@ from ._version import __version__
 from .analysis import analyze, analyze_binary, analyze_hex
 from .exceptions import BinaryCryptoLabError
 from .forensics import PublicKeyDissection, dissect_many, dissect_public_key
+from .glv import verify_glv
 from .hashing import double_sha256, hash160, hash_bytes, ripemd160, sha256, sha512
 from .models.analysis_result import AnalysisResult, BinaryAnalysis, HexAnalysis
+from .segmentation import segmentation_report
 
 __all__ = [
     "AnalysisResult",
@@ -49,6 +51,8 @@ __all__ = [
     "hash160",
     "hash_bytes",
     "ripemd160",
+    "segmentation_report",
     "sha256",
     "sha512",
+    "verify_glv",
 ]
