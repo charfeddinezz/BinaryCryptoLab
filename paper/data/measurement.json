@@ -1,0 +1,129 @@
+{
+  "fit": {
+    "model": "log2(steps) = slope * bits + intercept",
+    "slope": 0.4972800635305309,
+    "slope_standard_error": 0.015324474055679297,
+    "intercept": 1.395247287825649,
+    "r_squared": 0.9962157271247863,
+    "expected_slope": 0.5,
+    "expected_constant": 3.76,
+    "has_error_estimate": true,
+    "z_score": -0.17748971087598872,
+    "agrees_with_generic_group_model": true,
+    "extrapolated_log2_cost_at_256_bits": 128.69894355164155,
+    "points": [
+      {
+        "bits": 12,
+        "trials": 15,
+        "median_steps": 177.0,
+        "mean_steps": 188.6,
+        "min_steps": 33,
+        "max_steps": 354,
+        "predicted_sqrt_scaling": 164.57576004277936,
+        "ratio_to_prediction": 1.075492526687959
+      },
+      {
+        "bits": 16,
+        "trials": 15,
+        "median_steps": 636.0,
+        "mean_steps": 626.8,
+        "min_steps": 126,
+        "max_steps": 1314,
+        "predicted_sqrt_scaling": 653.3572744804482,
+        "ratio_to_prediction": 0.9734337166533414
+      },
+      {
+        "bits": 20,
+        "trials": 15,
+        "median_steps": 2193.0,
+        "mean_steps": 2493.0,
+        "min_steps": 585,
+        "max_steps": 4818,
+        "predicted_sqrt_scaling": 2593.7946633547904,
+        "ratio_to_prediction": 0.845479417080608
+      },
+      {
+        "bits": 24,
+        "trials": 15,
+        "median_steps": 12810.0,
+        "mean_steps": 14516.6,
+        "min_steps": 5685,
+        "max_steps": 27369,
+        "predicted_sqrt_scaling": 10297.230961418049,
+        "ratio_to_prediction": 1.2440237621159382
+      },
+      {
+        "bits": 28,
+        "trials": 15,
+        "median_steps": 33828.0,
+        "mean_steps": 42479.0,
+        "min_steps": 9720,
+        "max_steps": 110322,
+        "predicted_sqrt_scaling": 40879.47553089825,
+        "ratio_to_prediction": 0.8275057240994084
+      },
+      {
+        "bits": 32,
+        "trials": 15,
+        "median_steps": 178104.0,
+        "mean_steps": 175188.2,
+        "min_steps": 80496,
+        "max_steps": 276372,
+        "predicted_sqrt_scaling": 162289.40828294063,
+        "ratio_to_prediction": 1.0974468505639488
+      }
+    ]
+  },
+  "bsgs_comparison": [
+    {
+      "bits": 12,
+      "table_entries": 62,
+      "steps": 78
+    },
+    {
+      "bits": 16,
+      "table_entries": 182,
+      "steps": 303
+    },
+    {
+      "bits": 20,
+      "table_entries": 969,
+      "steps": 1545
+    },
+    {
+      "bits": 24,
+      "table_entries": 2926,
+      "steps": 3992
+    },
+    {
+      "bits": 28,
+      "table_entries": 15930,
+      "steps": 30681
+    },
+    {
+      "bits": 32,
+      "table_entries": 60135,
+      "steps": 91819
+    }
+  ],
+  "pohlig_hellman": {
+    "order": "2162160",
+    "factorisation": {
+      "2": 4,
+      "3": 3,
+      "5": 1,
+      "7": 1,
+      "11": 1,
+      "13": 1
+    },
+    "recovered": true,
+    "steps": 53,
+    "scalar_verified": true,
+    "claim": "a smooth order collapses to its largest prime factor; secp256k1's order is prime, so this method removes nothing"
+  },
+  "notes": [
+    "Every run is verified by substituting the recovered scalar into the curve; an unverified run aborts the study instead of being averaged in.",
+    "The exponent is measured on 6-64 bit groups, which is where the algorithm can be run to completion. Extrapolating a fitted power law to 256 bits is a consistency check against the generic-group model, not a proof.",
+    "The 256-bit curve is never searched by this module; the extrapolation is a statement about the exponent, and the exponent is what an attack would have to change."
+  ]
+}

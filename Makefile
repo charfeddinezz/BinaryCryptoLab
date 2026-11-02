@@ -5,6 +5,7 @@
 
 PYTHON ?= python3
 SRC_DIRS := src tests examples
+EXTRA_FILES := paper/reproduce.py
 
 .PHONY: help install dev gui test test-gui lint format format-check typecheck check \
         build clean run-gui examples
@@ -42,13 +43,13 @@ test-gui:
 	$(PYTHON) -m pytest -q tests/test_gui.py tests/test_gui_app.py
 
 lint:
-	$(PYTHON) -m ruff check $(SRC_DIRS)
+	$(PYTHON) -m ruff check $(SRC_DIRS) $(EXTRA_FILES)
 
 format:
-	$(PYTHON) -m ruff format $(SRC_DIRS)
+	$(PYTHON) -m ruff format $(SRC_DIRS) $(EXTRA_FILES)
 
 format-check:
-	$(PYTHON) -m ruff format --check $(SRC_DIRS)
+	$(PYTHON) -m ruff format --check $(SRC_DIRS) $(EXTRA_FILES)
 
 typecheck:
 	$(PYTHON) -m mypy

@@ -1,0 +1,96 @@
+discrete logarithm audit
+========================
+
+Claim tested
+  the elliptic-curve discrete logarithm on secp256k1 is computationally infeasible for 256-bit scalars, and no published result refutes it
+
+Verdict: not refuted
+  beyond reasonable doubt within the classical, public-data model: a theorem (Nechaev-Shoup) fixes the generic cost, the audit rules out every published non-generic structure, and the measurement reproduces the predicted exponent. This is not a proof of hardness in general; no finite evidence is.
+
+Measured scaling of Pollard rho (instances this tool can solve)
+Bits  Trials  Median steps  Min     Max      x 3.76*sqrt(q)
+----  ------  ------------  ------  -------  --------------
+12    5       93            87      198      0.67
+16    5       726           402     768      1.30
+20    5       3,099         975     4,407    1.38
+24    5       8,370         2,232   16,638   0.93
+28    5       41,724        40,497  109,350  1.16
+32    5       110,808       41,250  291,300  0.77
+  fit: log2(steps) = 0.5004 * bits + 1.1201   (R^2 = 0.9873, SE = 0.0284, z = +0.02)
+  the generic-group model predicts a slope of 0.5; the measurement agrees
+  extrapolation to 256 bits: 2^129.2 operations
+
+Memory-bound comparison (baby-step giant-step)
+Bits  Table entries  Steps
+----  -------------  -------
+12    51             73
+16    205            276
+20    983            1,347
+24    3,615          3,673
+28    15,698         17,489
+32    61,705         106,114
+  the table is the point: at 256 bits it would need about 2^128 stored entries, so the memory is as impossible as the time
+
+Positive control (smooth order)
+Field             Value
+----------------  -----------------------------------
+order             2162160
+factorisation     2^4 * 3^3 * 5^1 * 7^1 * 11^1 * 13^1
+recovered         yes
+group operations  53
+  a smooth order collapses to its largest prime factor; secp256k1's order is prime, so this method removes nothing
+
+Structural audit (10 properties, 0 exploitable)
+Property                   Measured                                                        Exploitable
+-------------------------  --------------------------------------------------------------  -----------
+group_order_prime          n = 1157920892373161954235709...141518161494337 is prime: True  no
+cofactor_one               h = 1 (the group order equals n)                                no
+not_anomalous              #E - p = -432420386565659656852420866390673177326 != 0          no
+no_small_embedding_degree  no k <= 1000 with p^k = 1 (mod n): True                         no
+not_supersingular          p mod 3 = 1, j = 0, trace != 0                                  no
+no_weil_descent            p = 2^256 - 2^32 - 977, prime; F_p has no proper subfield       no
+nonzero_discriminant       4a^3 + 27b^2 = 108 mod p, nonzero: True                         no
+known_endomorphism_only    phi(P) = (beta*x, y) with phi...ambda*P, verified by glv-check  no
+no_index_calculus_for_ec   best published ECDLP records ...ds, not index-calculus records  no
+generic_group_bound        Nechaev-Shoup lower bound for generic algorithms                no
+
+Claim families and the step that fails (8)
+Code                   Claim                                     Why it fails
+---------------------  ----------------------------------------  ------------------------------------------------------------
+index_calculus         Index calculus sol...lliptic curves too.  Index calculus needs a facto...cost more than rho, not less.
+pohlig_hellman         The group order is...m to small factors.  It is not composite. The bas...d the cost is a full sqrt(n).
+glv_speedup            The curve has an e...discrete logarithm.  The endomorphism halves the .../2 divided by 2 is still 1/2.
+brute_force_scale      With enough GPUs, ...search is feasible.  Parallel collision search di...ient-equivalent in aggregate.
+quantum                Quantum computers ... is already broken.  Shor's algorithm would break...it about its classical scope.
+statistical_structure  A statistical or s...hing about the key.  The address fixes zero bits ...self be an attack on HASH160.
+side_channel           Side-channel and f...ogarithm is broken.  They attack an implementatio...trace, and no signing oracle.
+published_proof        A published proof ...dard 256-bit curve.  No standard curve has ever b...r the claimant does not know.
+
+Address-level chain for the supplied address
+Step                               Feasible  Cost (log2)
+---------------------------------  --------  -----------
+input -> version/payload/checksum  yes       0.0
+payload -> public key              no        160.0
+public key -> private scalar       no        128.0
+  total: 2^288.0
+  the address adds a 2^160 preimage step in front of the 2^128 discrete logarithm; refuting the discrete logarithm would lift the second step only, leaving the first
+
+What would refute this (5)
+  - signature_from_public_key: a signature that verifies under the target public key, produced by someone who does not hold the private scalar
+      would mean: the discrete logarithm was solved for that key, and the conclusion of this paper is false for that key
+  - published_algorithm_with_runs: a published algorithm that recovers a random 256-bit scalar in finite time, reproduced by an independent party
+      would mean: the generic-group lower bound is circumvented by structure that this audit did not enumerate
+  - measured_exponent_drop: the measured growth exponent over larger instances falling significantly below 1/2
+      would mean: either the algorithm exploits structure the model does not capture, or the measurement is wrong; both would invalidate the extrapolation
+  - missed_structure: a structural property of secp256k1 absent from the audit that supports a transfer or a smooth-order reduction
+      would mean: the enumeration of attack families was incomplete
+  - broken_assumption: a proof that HASH160 is not preimage resistant, or that P = NP
+      would mean: the 2^160 step falls, and with it the address-level barrier even if the discrete logarithm stands
+
+Scope
+  - classical algorithms only; quantum attacks are listed but not modelled
+  - public data only: no side channel, no signing oracle, no implementation bug
+  - one curve (secp256k1) and one hash (HASH160); other curves are out of scope
+  - hardness is an empirical and model-relative claim, not a theorem about all algorithms, and the falsifiers state what would end it
+
+No private scalar was searched for, and the 256-bit curve was never attacked.

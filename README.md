@@ -120,13 +120,33 @@ never stores private keys, and never attempts to recover anyone's key.
   **mathematically closed**. The one infeasible lead is named as such, with its cost
   in bits, so the boundary of what is knowable is explicit rather than implied.
 
+### The discrete-logarithm audit and the paper
+
+- **`dlp-audit`** answers the claim that secp256k1 has been broken by a *cross-logarithm*
+  (اللوغاريتم المتقاطع) with measurement instead of assertion: a Pollard rho study over
+  six instance sizes with 15 verified trials each, ten structural properties of the
+  published curve, two independent cost models, eight rebutted claims, and five stated
+  falsifiers. Verdict: **`not refuted`** - and the report says what that does not mean.
+- **Every answer is verified.** A rho run that fails to reproduce the target aborts the
+  study; it is never averaged in. The fitted exponent is `0.4973 ± 0.0153` with
+  `R² = 0.9962`, a z-score of `-0.18` against the generic `0.5`, and a 256-bit
+  extrapolation of `2^128.7` against rho's own `2^128.3`.
+- **A positive control, so silence means something:** the same harness solves a
+  smooth-order group of order 2 162 160 in **53** operations, where rho would need
+  about 5 530. It exploits structure when structure exists.
+- **A paper in two languages** - [`paper/cross_logarithm_en.md`](paper/cross_logarithm_en.md)
+  and [`paper/cross_logarithm_ar.md`](paper/cross_logarithm_ar.md) - reproducible from
+  one script (`python paper/reproduce.py`, about eight seconds, no network, no plotting
+  dependency), with the JSON and SVG artefacts committed and guarded by tests.
+
 ### Interfaces and reports
 
 - Professional `argparse` CLI with six commands, helpful `--help`, documented
   exit codes, and private-key warnings.
 - Deterministic JSON and CSV reports, atomic writes, overwrite protection.
 - Optional Streamlit interface with JSON/CSV downloads and no network access.
-- 990+ tests: unit, property-based (Hypothesis), integration, CLI, and GUI.
+- 1 600+ tests: unit, property-based (Hypothesis), integration, CLI, GUI, and
+  paper-artefact regression.
 
 ## Requirements
 
@@ -599,7 +619,11 @@ BinaryCryptoLab/
 │   ├── analysis.py  binary_utils.py  hex_utils.py  bit_operations.py
 │   ├── byte_operations.py  statistics.py
 │   ├── hashing.py  ecc.py  bitcoin.py  base58.py  bech32.py
-│   ├── forensics.py
+│   ├── curve_arithmetic.py  glv.py  segmentation.py  randomness.py
+│   ├── dlp.py  script_recovery.py  script_templates.py  mining.py
+│   ├── hd_keys.py  key_reconstruction.py  investigation.py  utxo_audit.py
+│   ├── forensics.py  address_compare.py  address_forensics.py  address_formats.py
+│   ├── address_safety.py
 │   ├── models/
 │   │   ├── __init__.py
 │   │   └── analysis_result.py
@@ -609,6 +633,13 @@ BinaryCryptoLab/
 │   │   ├── __init__.py  service.py  app.py  launcher.py
 │   └── utils/
 │       ├── __init__.py  formatting.py  logging_utils.py
+├── paper/
+│   ├── cross_logarithm_en.md  cross_logarithm_ar.md
+│   ├── reproduce.py
+│   ├── data/      measurement.json  assessment.json  audit.json
+│   │              cost_models.json  claims.json
+│   └── figures/   fig_scaling.svg  fig_costs.svg  fig_control.svg
+├── demo_output/
 ├── tests/
 │   ├── conftest.py  vectors.py  __init__.py
 │   ├── test_validation.py  test_analysis.py
@@ -616,7 +647,12 @@ BinaryCryptoLab/
 │   ├── test_bit_operations.py  test_byte_operations.py  test_statistics.py
 │   ├── test_hashing.py  test_ecc.py  test_base58.py  test_bech32.py
 │   ├── test_bitcoin.py  test_forensics.py  test_reports.py  test_cli.py
-│   ├── test_security.py
+│   ├── test_security.py  test_curve_arithmetic.py  test_glv.py  test_segmentation.py
+│   ├── test_hd_keys.py  test_key_reconstruction.py  test_randomness.py
+│   ├── test_script_templates.py  test_investigation_extras.py  test_special_functions.py
+│   ├── test_address_formats.py  test_address_safety.py  test_address_forensics.py
+│   ├── test_cli_scenarios.py  test_cli_v16.py  test_cli_v17.py  test_cli_v18.py
+│   ├── test_cli_v19.py  test_dlp.py  test_reproduce.py
 │   └── test_gui.py  test_gui_app.py
 ├── examples/
 │   ├── binary_analysis.py  hex_analysis.py
@@ -625,7 +661,8 @@ BinaryCryptoLab/
 ├── docs/
 │   ├── architecture.md  usage.md  cryptography.md
 │   ├── bitcoin_addresses.md  public_key_forensics.md  security.md
-│   ├── key_assembly.md
+│   ├── key_assembly.md  dlp_audit.md  address_scenarios.md
+│   └── address_forensics.md  how_it_works_ar.md
 └── .github/workflows/tests.yml
 ```
 
@@ -661,6 +698,8 @@ BinaryCryptoLab/
 - [Address scenarios](docs/address_scenarios.md) — every input, every output, and
   which limitations were removed, reduced, or are irreducible.
 - [Usage](docs/usage.md) — complete CLI reference and Python API examples.
+- [Discrete-logarithm audit](docs/dlp_audit.md) — the `dlp-audit` command, the ten
+  audited properties, the verdicts, and the paper in `paper/`.
 
 ## Known limitations
 

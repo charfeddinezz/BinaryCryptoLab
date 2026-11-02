@@ -1,0 +1,209 @@
+{
+  "claim": "the elliptic-curve discrete logarithm on secp256k1 is computationally infeasible for 256-bit scalars, and no published result refutes it",
+  "verdict": "not refuted",
+  "confidence": "beyond reasonable doubt within the classical, public-data model: a theorem (Nechaev-Shoup) fixes the generic cost, the audit rules out every published non-generic structure, and the measurement reproduces the predicted exponent. This is not a proof of hardness in general; no finite evidence is.",
+  "evidence": [
+    "measured growth exponent 0.497 +/- 0.015 (R^2 = 0.996) against the 0.5 of the generic-group model",
+    "the same campaign breaks a smooth-order instance of 2162160 in 53 operations, so the harness demonstrably can exploit structure when it exists",
+    "extrapolated cost at 256 bits: 2^128.7 group operations from the fit, against 2^128 from rho's constant",
+    "10 structural properties audited, 0 exploitable",
+    "finite-field DLP at 256 bits (a *weaker* problem) is 2^46.7, which shows what a real sub-exponential attack looks like and that elliptic curves have none"
+  ],
+  "rebuttals": [
+    {
+      "code": "index_calculus",
+      "claim": "Index calculus solves discrete logarithms sub-exponentially, so it solves them on elliptic curves too.",
+      "why_it_fails": "Index calculus needs a factor base of algebraically small elements and a smoothness notion. An elliptic-curve group over a prime field has neither: the summation-polynomial systems it replaces them with grow to degree 2^m and cost more than rho, not less.",
+      "evidence": "the computed contrast in this report: 2^46 for the finite-field DLP at 256 bits (where index calculus does apply) against 2^128 for ECDLP",
+      "reference": "Semaev 2004; Gaudry 2009"
+    },
+    {
+      "code": "pohlig_hellman",
+      "claim": "The group order is composite, so Pohlig-Hellman reduces the problem to small factors.",
+      "why_it_fails": "It is not composite. The base-point order n is prime, so the factorisation is the trivial one and the cost is a full sqrt(n).",
+      "evidence": "group_order_prime in the structural audit, plus the smooth-order control where the same code solves a 2^21 instance in tens of operations",
+      "reference": "Pohlig & Hellman 1978"
+    },
+    {
+      "code": "glv_speedup",
+      "claim": "The curve has an efficient endomorphism, which breaks the discrete logarithm.",
+      "why_it_fails": "The endomorphism halves the *constant* of a scalar multiplication and of a rho walk. An exponent of 1/2 divided by 2 is still 1/2.",
+      "evidence": "glv-check verifies phi(P) = lambda*P and the measurement shows the 0.5 exponent with the constant absorbed",
+      "reference": "Gallant, Lambert & Vanstone 2001"
+    },
+    {
+      "code": "brute_force_scale",
+      "claim": "With enough GPUs, or enough parallel clients, the search is feasible.",
+      "why_it_fails": "Parallel collision search divides the *time* by the number of clients but not the work. At 2^128 operations, even 10^9 clients leave 2^98 operations per client-equivalent in aggregate.",
+      "evidence": "the ecdlp cost model, and the measured linear growth of steps with sqrt(q) across six instance sizes",
+      "reference": "van Oorschot & Wiener 1999"
+    },
+    {
+      "code": "quantum",
+      "claim": "Quantum computers refute the discrete logarithm, so the problem is already broken.",
+      "why_it_fails": "Shor's algorithm would break it, on a fault-tolerant machine that does not exist; Grover's only halves the exponent of a search. Neither is a classical refutation, and this paper is explicit about its classical scope.",
+      "evidence": "the scope statement, and the Grover row of the algorithm table (2^160 preimage becomes about 2^80 quantum operations, still infeasible)",
+      "reference": "Shor 1994; Grover 1996"
+    },
+    {
+      "code": "statistical_structure",
+      "claim": "A statistical or structural test on the address reveals something about the key.",
+      "why_it_fails": "The address fixes zero bits of the scalar. The map from scalar to HASH160 is 2^96-to-1 and behaves as a pseudorandom function; any test with an advantage over guessing would itself be an attack on HASH160.",
+      "evidence": "the address report's one-scale section (0 of 256 scalar bits known) and the eight-test randomness battery, which finds nothing",
+      "reference": "this project, dissect-address"
+    },
+    {
+      "code": "side_channel",
+      "claim": "Side-channel and fault attacks break elliptic curves, so the discrete logarithm is broken.",
+      "why_it_fails": "They attack an implementation that holds the secret, not a public key. A public key alone offers no timing, no power trace, and no signing oracle.",
+      "evidence": "the threat model: every command in this project takes public data only",
+      "reference": "standard literature"
+    },
+    {
+      "code": "published_proof",
+      "claim": "A published proof or tool has already solved a standard 256-bit curve.",
+      "why_it_fails": "No standard curve has ever been publicly broken. Every claimed break has failed the same acceptance test: a signature verifiable under a public key whose scalar the claimant does not know.",
+      "evidence": "the falsifiability protocol below, which states the exact test that would settle it in either direction",
+      "reference": "this paper, section on falsifiability"
+    }
+  ],
+  "audit": {
+    "findings": [
+      {
+        "code": "group_order_prime",
+        "property": "The base-point order is prime, so Pohlig-Hellman has nothing to split",
+        "measured": "n = 115792089237316195423570985008687907852837564279074904382605163141518161494337 is prime: True",
+        "exploitable": false,
+        "verdict": "Pohlig-Hellman costs a full sqrt(n); the largest prime factor is n itself, which the measured smooth-order control confirms from both sides"
+      },
+      {
+        "code": "cofactor_one",
+        "property": "The curve has cofactor 1, so there is no small subgroup to land in",
+        "measured": "h = 1 (the group order equals n)",
+        "exploitable": false,
+        "verdict": "small-subgroup confinement needs a cofactor > 1; there is none, so the attack has no target"
+      },
+      {
+        "code": "not_anomalous",
+        "property": "#E != p, so the Smart-Satoh-Semenov additive transfer does not apply",
+        "measured": "#E - p = -432420386565659656852420866390673177326 != 0",
+        "exploitable": false,
+        "verdict": "trace != 1, so the curve is not anomalous"
+      },
+      {
+        "code": "no_small_embedding_degree",
+        "property": "No small k with p^k = 1 mod n, so MOV/Frey-Ruck has no target field",
+        "measured": "no k <= 1000 with p^k = 1 (mod n): True",
+        "exploitable": false,
+        "verdict": "moving the problem to a finite field needs a small embedding degree; none exists below the probe limit, and the true degree divides n-1"
+      },
+      {
+        "code": "not_supersingular",
+        "property": "The curve is ordinary, so the curve has no low-degree isogeny to a supersingular neighbour",
+        "measured": "p mod 3 = 1, j = 0, trace != 0",
+        "exploitable": false,
+        "verdict": "supersingular curves have trace 0 and small embedding degree; this one has neither"
+      },
+      {
+        "code": "no_weil_descent",
+        "property": "The field is prime, so there is no proper subfield to descend to",
+        "measured": "p = 2^256 - 2^32 - 977, prime; F_p has no proper subfield",
+        "exploitable": false,
+        "verdict": "Weil descent needs F_{p^m} with m > 1; prime fields have no such structure"
+      },
+      {
+        "code": "nonzero_discriminant",
+        "property": "The curve is non-singular, so no isomorphism to an additive or multiplicative group exists",
+        "measured": "4a^3 + 27b^2 = 108 mod p, nonzero: True",
+        "exploitable": false,
+        "verdict": "a singular curve would hand the discrete logarithm to F_p^* or F_p^+; the discriminant is 108 != 0"
+      },
+      {
+        "code": "known_endomorphism_only",
+        "property": "The only known exploitable structure is the CM endomorphism of discriminant -3",
+        "measured": "phi(P) = (beta*x, y) with phi(P) = lambda*P, verified by glv-check",
+        "exploitable": false,
+        "verdict": "GLV saves a factor of 2 in the constant of a scalar multiplication and of a rho attack; the exponent stays 1/2, which the measurement confirms"
+      },
+      {
+        "code": "no_index_calculus_for_ec",
+        "property": "No index-calculus algorithm is known for prime-order elliptic curves",
+        "measured": "best published ECDLP records are generic-group records, not index-calculus records",
+        "exploitable": false,
+        "verdict": "summation-polynomial index calculus needs small-degree extension fields; it degrades to worse than rho on a prime field"
+      },
+      {
+        "code": "generic_group_bound",
+        "property": "Every algorithm that only uses the group operations needs Omega(sqrt(n))",
+        "measured": "Nechaev-Shoup lower bound for generic algorithms",
+        "exploitable": false,
+        "verdict": "the lower bound is a theorem, so a refutation must use non-generic structure, and the rows above enumerate every known candidate"
+      }
+    ],
+    "exploitable_count": 0,
+    "conclusion": "no audited property yields an attack on secp256k1"
+  },
+  "falsifiers": [
+    {
+      "code": "signature_from_public_key",
+      "observation": "a signature that verifies under the target public key, produced by someone who does not hold the private scalar",
+      "would_mean": "the discrete logarithm was solved for that key, and the conclusion of this paper is false for that key",
+      "detection": "verify the signature arithmetically; no cooperation from the key holder is needed to check it"
+    },
+    {
+      "code": "published_algorithm_with_runs",
+      "observation": "a published algorithm that recovers a random 256-bit scalar in finite time, reproduced by an independent party",
+      "would_mean": "the generic-group lower bound is circumvented by structure that this audit did not enumerate",
+      "detection": "re-run it on an instance generated after publication, so that precomputation and overfitting are excluded"
+    },
+    {
+      "code": "measured_exponent_drop",
+      "observation": "the measured growth exponent over larger instances falling significantly below 1/2",
+      "would_mean": "either the algorithm exploits structure the model does not capture, or the measurement is wrong; both would invalidate the extrapolation",
+      "detection": "extend measure_scaling to larger sizes and watch the fit and its standard error rather than a single run"
+    },
+    {
+      "code": "missed_structure",
+      "observation": "a structural property of secp256k1 absent from the audit that supports a transfer or a smooth-order reduction",
+      "would_mean": "the enumeration of attack families was incomplete",
+      "detection": "each audit row names the value that was measured; re-check that value independently with curve parameters from SEC 2"
+    },
+    {
+      "code": "broken_assumption",
+      "observation": "a proof that HASH160 is not preimage resistant, or that P = NP",
+      "would_mean": "the 2^160 step falls, and with it the address-level barrier even if the discrete logarithm stands",
+      "detection": "a preimage of a published HASH160 digest, verifiable by hashing it"
+    }
+  ],
+  "address_case": {
+    "address": "1BEwWKUgvRffDWZFdnj2FLtEXxCVo1ACAa",
+    "type": "p2pkh",
+    "payload": "70542a0b4e6776be4ba75e4d975ec8de3333fecc",
+    "backward_chain": [
+      {
+        "step": "input -> version/payload/checksum",
+        "feasible": true,
+        "cost_log2": 0.0
+      },
+      {
+        "step": "payload -> public key",
+        "feasible": false,
+        "cost_log2": 160.0
+      },
+      {
+        "step": "public key -> private scalar",
+        "feasible": false,
+        "cost_log2": 128.0
+      }
+    ],
+    "total_cost_log2": 288.0,
+    "hardness_verdict": "The chain cannot be run backwards. Both backward steps are infeasible, and they must both be solved: the cheaper one alone is already about 2^128 operations.",
+    "note": "the address adds a 2^160 preimage step in front of the 2^128 discrete logarithm; refuting the discrete logarithm would lift the second step only, leaving the first"
+  },
+  "scope": [
+    "classical algorithms only; quantum attacks are listed but not modelled",
+    "public data only: no side channel, no signing oracle, no implementation bug",
+    "one curve (secp256k1) and one hash (HASH160); other curves are out of scope",
+    "hardness is an empirical and model-relative claim, not a theorem about all algorithms, and the falsifiers state what would end it"
+  ]
+}

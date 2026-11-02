@@ -4,6 +4,87 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-11-02
+
+### Added
+
+* **`binarycryptolab.dlp`** - a measured apparatus for the elliptic-curve discrete
+  logarithm, written for one purpose and honest about its limits:
+  * exact group law over small prime fields, with point validation;
+  * instance construction that *derives and then verifies* the base-point order
+    (`p = c·q − 1`) instead of assuming one;
+  * `pollard_rho_dlp` (Teske adding-walk rho with Floyd cycle finding),
+    `bsgs_dlp` (deduplicated table), and `pohlig_hellman_dlp` (digit lifting including
+    the digit-0/infinity case), each returning a **verified** scalar - an unverified run
+    raises instead of being averaged into a study;
+  * `measure_scaling`, which fits `log2(steps)` against instance size and reports the
+    slope, its standard error, `R²`, the z-score against the generic-group exponent
+    `0.5`, and the 256-bit extrapolation. Two sizes give no error estimate, and the
+    module says so (`has_error_estimate`) instead of dividing by zero;
+  * `structural_audit`, ten properties of secp256k1 measured from the published
+    parameters (prime order, cofactor one, non-anomalous, no small embedding degree,
+    not supersingular, no Weil descent, non-singular, only the CM endomorphism, no
+    elliptic index calculus, the generic lower bound), each with an `exploitable` flag;
+  * `CLAIM_REBUTTALS` (eight claims) and `FALSIFIERS` (five observations that would end
+    the conclusion), plus `assess_dlp_refutation`, which combines everything into one
+    verdict with evidence lines that are only emitted when the evidence exists.
+* **`binarycryptolab dlp-audit`** - the whole assessment from the command line:
+  * `--sizes` / `--trials` for the scaling study, `--skip-measurement` to audit the
+    parameters only (the report then states that the fit is not assessable rather than
+    inventing one), `--address` for the backward chain of one mainnet address;
+  * text, JSON, and CSV output, atomic `--output` writes, and the same validation
+    errors as the rest of the CLI.
+* **A research paper, in two languages** - `paper/cross_logarithm_en.md` and
+  `paper/cross_logarithm_ar.md` refute the cross-logarithm (اللوغاريتم المتقاطع)
+  hypothesis with four legs: a measured exponent, a structural audit, a cost contrast,
+  and a falsifiability protocol. The paper also states what it does not show.
+* **`paper/reproduce.py`** - regenerates every number and figure in about eight
+  seconds, with no plotting dependency (a small hand-rolled SVG writer), no network
+  access, and a fixed seed. It writes `paper/data/*.json` and `paper/figures/*.svg`.
+  The committed JSON is a deterministic snapshot, and the test suite enforces that.
+* **`docs/dlp_audit.md`** - the command and module reference: what is measured, what
+  the verdicts mean, and what the audit refuses to claim.
+
+### Measured results
+
+* rho over 12-32 bit instances, 15 trials each: slope **0.4973 ± 0.0153**, `R²`
+  **0.9962**, z **−0.18**, 256-bit extrapolation **2^128.7** (rho's own constant is
+  2^128.3).
+* BSGS on the same instances tracks `√q` independently (32 bits: 91 819 steps against
+  65 536).
+* Positive control: a smooth order `2162160` is solved by Pohlig-Hellman in **53**
+  operations, where rho would need about 5 530 - so the harness does exploit structure
+  when structure exists.
+* Structural audit: **10 properties, 0 exploitable**. Finite-field DLP at 256 bits:
+  **2^46.7**, against **2^128.3** for the curve. Address chain: preimage step
+  **2^160**, stage-exponent sum **2^288** (labelled as bookkeeping, not as an attack
+  cost).
+* Verdict: **`not refuted`**, with five falsifiers and an explicit scope statement
+  (classical algorithms, public data, one curve).
+
+### Tests
+
+* `tests/test_dlp.py` (113 tests) - group law against known orders, every solver
+  verified by substitution, fit properties, the smooth-order control, the audit, and a
+  monkeypatched proof that the verdict is actually computed (injecting an exploitable
+  finding flips it to `refuted`).
+* `tests/test_cli_v19.py` (18 tests) - text/JSON/CSV rendering, `--output`, validation
+  errors, and the `not assessable` path.
+* `tests/test_reproduce.py` (12 tests) - the driver writes every advertised artefact,
+  the figures contain the points they claim, and the committed snapshots still match
+  today's code.
+
+### Fixed
+
+* `slope_standard_error` returned `nan` for two-size studies, which made a comparison
+  against `0.5` silently false and the JSON export non-standard. It now returns `0.0`
+  with an explicit `has_error_estimate` flag, and agreement is reported as `None`
+  ("not assessable") rather than as a disagreement.
+* `measure_scaling` accepted a single size and produced a meaningless slope; it now
+  requires at least two.
+* A rho closure captured its loop variable; the walk step is now a module-level
+  function, which removes the aliasing risk as well as the lint warning.
+
 ## [1.8.0] - 2026-10-30
 
 ### Added

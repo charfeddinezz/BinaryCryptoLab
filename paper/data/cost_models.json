@@ -1,0 +1,23 @@
+{
+  "ecdlp_256": {
+    "problem": "ECDLP on a prime-order group of the given size",
+    "model": "Pollard rho / van Oorschot-Wiener: ~1.25 * sqrt(q) group operations",
+    "bits": 256,
+    "log2_operations": 128.32192809488737,
+    "operations": 4.25352958651175e+38,
+    "note": "the generic-group model is proven optimal to within a constant, so a refutation would have to exhibit non-generic structure, which the structural audit enumerates and rules out"
+  },
+  "field_dlp_256": {
+    "problem": "DLP in F_p (not on an elliptic curve)",
+    "model": "L_p[1/3, 1.923] = exp(1.923 * (ln p)^(1/3) * (ln ln p)^(2/3))",
+    "bits": 256,
+    "log2_operations": 46.66459318617103,
+    "operations": 111542990659644.31,
+    "note": "sub-exponential, and still about 2^46 at 256 bits, which is why 256-bit F_p Diffie-Hellman is not used and why logjam-style precomputation was possible"
+  },
+  "field_dlp_256_log2": 46.66459318617103,
+  "address_preimage": 160.0,
+  "address_stage_sum": 288.0,
+  "address_total": 288.0,
+  "field_dlp": 46.66459318617103
+}

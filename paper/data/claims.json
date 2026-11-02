@@ -1,0 +1,92 @@
+{
+  "claims": [
+    {
+      "code": "index_calculus",
+      "claim": "Index calculus solves discrete logarithms sub-exponentially, so it solves them on elliptic curves too.",
+      "why_it_fails": "Index calculus needs a factor base of algebraically small elements and a smoothness notion. An elliptic-curve group over a prime field has neither: the summation-polynomial systems it replaces them with grow to degree 2^m and cost more than rho, not less.",
+      "evidence": "the computed contrast in this report: 2^46 for the finite-field DLP at 256 bits (where index calculus does apply) against 2^128 for ECDLP",
+      "reference": "Semaev 2004; Gaudry 2009"
+    },
+    {
+      "code": "pohlig_hellman",
+      "claim": "The group order is composite, so Pohlig-Hellman reduces the problem to small factors.",
+      "why_it_fails": "It is not composite. The base-point order n is prime, so the factorisation is the trivial one and the cost is a full sqrt(n).",
+      "evidence": "group_order_prime in the structural audit, plus the smooth-order control where the same code solves a 2^21 instance in tens of operations",
+      "reference": "Pohlig & Hellman 1978"
+    },
+    {
+      "code": "glv_speedup",
+      "claim": "The curve has an efficient endomorphism, which breaks the discrete logarithm.",
+      "why_it_fails": "The endomorphism halves the *constant* of a scalar multiplication and of a rho walk. An exponent of 1/2 divided by 2 is still 1/2.",
+      "evidence": "glv-check verifies phi(P) = lambda*P and the measurement shows the 0.5 exponent with the constant absorbed",
+      "reference": "Gallant, Lambert & Vanstone 2001"
+    },
+    {
+      "code": "brute_force_scale",
+      "claim": "With enough GPUs, or enough parallel clients, the search is feasible.",
+      "why_it_fails": "Parallel collision search divides the *time* by the number of clients but not the work. At 2^128 operations, even 10^9 clients leave 2^98 operations per client-equivalent in aggregate.",
+      "evidence": "the ecdlp cost model, and the measured linear growth of steps with sqrt(q) across six instance sizes",
+      "reference": "van Oorschot & Wiener 1999"
+    },
+    {
+      "code": "quantum",
+      "claim": "Quantum computers refute the discrete logarithm, so the problem is already broken.",
+      "why_it_fails": "Shor's algorithm would break it, on a fault-tolerant machine that does not exist; Grover's only halves the exponent of a search. Neither is a classical refutation, and this paper is explicit about its classical scope.",
+      "evidence": "the scope statement, and the Grover row of the algorithm table (2^160 preimage becomes about 2^80 quantum operations, still infeasible)",
+      "reference": "Shor 1994; Grover 1996"
+    },
+    {
+      "code": "statistical_structure",
+      "claim": "A statistical or structural test on the address reveals something about the key.",
+      "why_it_fails": "The address fixes zero bits of the scalar. The map from scalar to HASH160 is 2^96-to-1 and behaves as a pseudorandom function; any test with an advantage over guessing would itself be an attack on HASH160.",
+      "evidence": "the address report's one-scale section (0 of 256 scalar bits known) and the eight-test randomness battery, which finds nothing",
+      "reference": "this project, dissect-address"
+    },
+    {
+      "code": "side_channel",
+      "claim": "Side-channel and fault attacks break elliptic curves, so the discrete logarithm is broken.",
+      "why_it_fails": "They attack an implementation that holds the secret, not a public key. A public key alone offers no timing, no power trace, and no signing oracle.",
+      "evidence": "the threat model: every command in this project takes public data only",
+      "reference": "standard literature"
+    },
+    {
+      "code": "published_proof",
+      "claim": "A published proof or tool has already solved a standard 256-bit curve.",
+      "why_it_fails": "No standard curve has ever been publicly broken. Every claimed break has failed the same acceptance test: a signature verifiable under a public key whose scalar the claimant does not know.",
+      "evidence": "the falsifiability protocol below, which states the exact test that would settle it in either direction",
+      "reference": "this paper, section on falsifiability"
+    }
+  ],
+  "falsifiers": [
+    {
+      "code": "signature_from_public_key",
+      "observation": "a signature that verifies under the target public key, produced by someone who does not hold the private scalar",
+      "would_mean": "the discrete logarithm was solved for that key, and the conclusion of this paper is false for that key",
+      "detection": "verify the signature arithmetically; no cooperation from the key holder is needed to check it"
+    },
+    {
+      "code": "published_algorithm_with_runs",
+      "observation": "a published algorithm that recovers a random 256-bit scalar in finite time, reproduced by an independent party",
+      "would_mean": "the generic-group lower bound is circumvented by structure that this audit did not enumerate",
+      "detection": "re-run it on an instance generated after publication, so that precomputation and overfitting are excluded"
+    },
+    {
+      "code": "measured_exponent_drop",
+      "observation": "the measured growth exponent over larger instances falling significantly below 1/2",
+      "would_mean": "either the algorithm exploits structure the model does not capture, or the measurement is wrong; both would invalidate the extrapolation",
+      "detection": "extend measure_scaling to larger sizes and watch the fit and its standard error rather than a single run"
+    },
+    {
+      "code": "missed_structure",
+      "observation": "a structural property of secp256k1 absent from the audit that supports a transfer or a smooth-order reduction",
+      "would_mean": "the enumeration of attack families was incomplete",
+      "detection": "each audit row names the value that was measured; re-check that value independently with curve parameters from SEC 2"
+    },
+    {
+      "code": "broken_assumption",
+      "observation": "a proof that HASH160 is not preimage resistant, or that P = NP",
+      "would_mean": "the 2^160 step falls, and with it the address-level barrier even if the discrete logarithm stands",
+      "detection": "a preimage of a published HASH160 digest, verifiable by hashing it"
+    }
+  ]
+}

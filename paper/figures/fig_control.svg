@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="300" viewBox="0 0 640 300">
+<rect width="640" height="300" fill="#ffffff"/>
+<text x="320.0" y="30.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="16" text-anchor="middle" fill="#1b1b1b">Positive control: order 2,162,160 is smooth, so it falls</text>
+<text x="188.0" y="112.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="12" text-anchor="end" fill="#1b1b1b">Pohlig-Hellman: 53 ops</text>
+<rect x="200.0" y="90.0" width="3.2" height="30.0" fill="#16a085"/>
+<text x="188.0" y="182.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="12" text-anchor="end" fill="#1b1b1b">rho would need ~5,529</text>
+<rect x="200.0" y="160.0" width="330.4" height="30.0" fill="#c0392b"/>
+<text x="200.0" y="260.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="12" text-anchor="start" fill="#1b1b1b">the same harness that finds nothing on secp256k1 breaks a smooth order at once:</text>
+<text x="200.0" y="278.0" font-family="DejaVu Sans, Arial, sans-serif" font-size="12" text-anchor="start" fill="#1b1b1b">the negative result is a property of the curve, not of the code</text>
+</svg>

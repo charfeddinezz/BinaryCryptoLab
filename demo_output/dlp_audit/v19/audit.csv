@@ -1,0 +1,30 @@
+section,key,value,verdict
+audit,group_order_prime,n = 115792089237316195423570985008687907852837564279074904382605163141518161494337 is prime: True,not exploitable
+audit,cofactor_one,h = 1 (the group order equals n),not exploitable
+audit,not_anomalous,#E - p = -432420386565659656852420866390673177326 != 0,not exploitable
+audit,no_small_embedding_degree,no k <= 1000 with p^k = 1 (mod n): True,not exploitable
+audit,not_supersingular,"p mod 3 = 1, j = 0, trace != 0",not exploitable
+audit,no_weil_descent,"p = 2^256 - 2^32 - 977, prime; F_p has no proper subfield",not exploitable
+audit,nonzero_discriminant,"4a^3 + 27b^2 = 108 mod p, nonzero: True",not exploitable
+audit,known_endomorphism_only,"phi(P) = (beta*x, y) with phi(P) = lambda*P, verified by glv-check",not exploitable
+audit,no_index_calculus_for_ec,"best published ECDLP records are generic-group records, not index-calculus records",not exploitable
+audit,generic_group_bound,Nechaev-Shoup lower bound for generic algorithms,not exploitable
+claim,index_calculus,"Index calculus solves discrete logarithms sub-exponentially, so it solves them on elliptic curves too.",fails
+claim,pohlig_hellman,"The group order is composite, so Pohlig-Hellman reduces the problem to small factors.",fails
+claim,glv_speedup,"The curve has an efficient endomorphism, which breaks the discrete logarithm.",fails
+claim,brute_force_scale,"With enough GPUs, or enough parallel clients, the search is feasible.",fails
+claim,quantum,"Quantum computers refute the discrete logarithm, so the problem is already broken.",fails
+claim,statistical_structure,A statistical or structural test on the address reveals something about the key.,fails
+claim,side_channel,"Side-channel and fault attacks break elliptic curves, so the discrete logarithm is broken.",fails
+claim,published_proof,A published proof or tool has already solved a standard 256-bit curve.,fails
+falsifier,signature_from_public_key,"a signature that verifies under the target public key, produced by someone who does not hold the private scalar",would refute
+falsifier,published_algorithm_with_runs,"a published algorithm that recovers a random 256-bit scalar in finite time, reproduced by an independent party",would refute
+falsifier,measured_exponent_drop,the measured growth exponent over larger instances falling significantly below 1/2,would refute
+falsifier,missed_structure,a structural property of secp256k1 absent from the audit that supports a transfer or a smooth-order reduction,would refute
+falsifier,broken_assumption,"a proof that HASH160 is not preimage resistant, or that P = NP",would refute
+measurement,12-bit,median_steps=93,ratio=0.666
+measurement,16-bit,median_steps=726,ratio=1.298
+measurement,20-bit,median_steps=3099,ratio=1.384
+measurement,24-bit,median_steps=8370,ratio=0.933
+measurement,28-bit,median_steps=41724,ratio=1.162
+measurement,32-bit,median_steps=110808,ratio=0.770

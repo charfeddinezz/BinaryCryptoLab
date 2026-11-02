@@ -42,6 +42,12 @@ from .analysis import analyze, attach_hashes
 from .binary_utils import binary_to_bytes
 from .bitcoin import Network, address_from_public_key, decode_address
 from .config import APP_NAME, EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE, MAX_FILE_HASH_BYTES
+from .dlp import (
+    HardnessAssessment,
+    ScalingStudy,
+    assess_dlp_refutation,
+    measure_scaling,
+)
 from .ecc import (
     CURVE_ORDER,
     parse_private_scalar,
@@ -627,6 +633,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_report_options(segments_command, flag="--report-format")
     segments_command.set_defaults(handler=_cmd_analyze_segments)
+
+    dlp_command = subparsers.add_parser(
+        "dlp-audit",
+        help="audit whether the elliptic-curve discrete logarithm has been refuted",
+        description=(
+            "Measure Pollard rho on real instances it can solve, fit the growth "
+            "exponent, audit every structural property of secp256k1 that a non-generic "
+            "attack could exploit, and state which observations would overturn the "
+            "conclusion. The 256-bit curve is never searched."
+        ),
+    )
+    dlp_command.add_argument(
+        "--address",
+        default=None,
+        metavar="ADDRESS",
+        help="also report the address-level backward chain for this address",
+    )
+    dlp_command.add_argument(
+        "--sizes",
+        default="12,16,20,24,28,32",
+        metavar="LIST",
+        help="instance sizes in bits for the measurement (default: 12,16,20,24,28,32)",
+    )
+    dlp_command.add_argument(
+        "--trials",
+        type=int,
+        default=5,
+        metavar="N",
+        help="independent instances per size (default 5)",
+    )
+    dlp_command.add_argument(
+        "--skip-measurement",
+        action="store_true",
+        help="report the structural audit and the claim rebuttals without running rho",
+    )
+    _add_report_options(dlp_command, flag="--report-format")
+    dlp_command.set_defaults(handler=_cmd_dlp_audit)
 
     audit_data_command.add_argument("address", help="the address the export describes")
     audit_data_command.add_argument(
@@ -3008,6 +3051,217 @@ def _cmd_glv_check(args: argparse.Namespace) -> int:
         text = _render_csv_rows(("code", "passed", "statement", "detail"), rows)
         return _emit_batch(text, output=args.output, overwrite=args.overwrite)
     return _emit_batch(_render_glv_text(report), output=args.output, overwrite=args.overwrite)
+
+
+def _render_dlp_text(assessment: HardnessAssessment, study: ScalingStudy | None) -> str:
+    """Render the discrete-logarithm audit as aligned text."""
+    lines = [
+        "discrete logarithm audit",
+        "========================",
+        "",
+        "Claim tested",
+        f"  {assessment.claim}",
+        "",
+        f"Verdict: {assessment.verdict}",
+        f"  {assessment.confidence}",
+    ]
+
+    if study is not None:
+        fit = study.fit
+        lines.append("")
+        lines.append("Measured scaling of Pollard rho (instances this tool can solve)")
+        lines.append(
+            format_table(
+                ("Bits", "Trials", "Median steps", "Min", "Max", "x 3.76*sqrt(q)"),
+                [
+                    (
+                        str(point.bits),
+                        str(point.trials),
+                        f"{point.median_steps:,.0f}",
+                        f"{point.min_steps:,}",
+                        f"{point.max_steps:,}",
+                        f"{point.ratio:.2f}",
+                    )
+                    for point in fit.points
+                ],
+            )
+        )
+        lines.append(
+            f"  fit: log2(steps) = {fit.slope:.4f} * bits + {fit.intercept:.4f}"
+            f"   (R^2 = {fit.r_squared:.4f}, SE = {fit.slope_standard_error:.4f},"
+            f" z = {fit.z_score:+.2f})"
+        )
+        agreement = fit.agrees_with_generic_group_model
+        verdict_phrase = (
+            "not assessable: fewer than three sizes gives no error estimate"
+            if agreement is None
+            else ("agrees" if agreement else "DISAGREES")
+        )
+        lines.append(
+            f"  the generic-group model predicts a slope of 0.5; the measurement {verdict_phrase}"
+        )
+        lines.append(f"  extrapolation to 256 bits: 2^{fit.extrapolated_bits(256):.1f} operations")
+        lines.append("")
+        lines.append("Memory-bound comparison (baby-step giant-step)")
+        lines.append(
+            format_table(
+                ("Bits", "Table entries", "Steps"),
+                [
+                    (str(bits), f"{entries:,}", f"{steps:,}")
+                    for bits, entries, steps in study.bsgs_comparison
+                ],
+            )
+        )
+        lines.append(
+            "  the table is the point: at 256 bits it would need about 2^128 stored "
+            "entries, so the memory is as impossible as the time"
+        )
+        control = study.pohlig_hellman
+        lines.append("")
+        lines.append("Positive control (smooth order)")
+        lines.append(
+            format_table(
+                ("Field", "Value"),
+                [
+                    ("order", str(control["order"])),
+                    (
+                        "factorisation",
+                        " * ".join(f"{p}^{e}" for p, e in control["factorisation"].items()),
+                    ),
+                    ("recovered", "yes" if control["recovered"] else "no"),
+                    ("group operations", str(control["steps"])),
+                ],
+            )
+        )
+        lines.append(f"  {control['claim']}")
+
+    audit = assessment.audit
+    lines.append("")
+    lines.append(
+        f"Structural audit ({len(audit.findings)} properties, {len(audit.exploitable)} exploitable)"
+    )
+    lines.append(
+        format_table(
+            ("Property", "Measured", "Exploitable"),
+            [
+                (
+                    abbreviate(finding.code, 30),
+                    abbreviate(finding.measured, 62),
+                    "YES" if finding.exploitable else "no",
+                )
+                for finding in audit.findings
+            ],
+        )
+    )
+
+    lines.append("")
+    lines.append(f"Claim families and the step that fails ({len(assessment.rebuttals)})")
+    lines.append(
+        format_table(
+            ("Code", "Claim", "Why it fails"),
+            [
+                (
+                    rebuttal.code,
+                    abbreviate(rebuttal.claim, 40),
+                    abbreviate(rebuttal.why_it_fails, 60),
+                )
+                for rebuttal in assessment.rebuttals
+            ],
+        )
+    )
+
+    address_case = assessment.address_case
+    if address_case:
+        lines.append("")
+        lines.append("Address-level chain for the supplied address")
+        lines.append(
+            format_table(
+                ("Step", "Feasible", "Cost (log2)"),
+                [
+                    (row["step"], "yes" if row["feasible"] else "no", f"{row['cost_log2']:.1f}")
+                    for row in address_case["backward_chain"]
+                ],
+            )
+        )
+        lines.append(f"  total: 2^{address_case['total_cost_log2']:.1f}")
+        lines.append(f"  {address_case['note']}")
+
+    lines.append("")
+    lines.append(f"What would refute this ({len(assessment.falsifiers)})")
+    for falsifier in assessment.falsifiers:
+        lines.append(f"  - {falsifier.code}: {falsifier.observation}")
+        lines.append(f"      would mean: {falsifier.would_mean}")
+
+    lines.append("")
+    lines.append("Scope")
+    lines.extend(f"  - {item}" for item in assessment.scope)
+    lines.append("")
+    lines.append("No private scalar was searched for, and the 256-bit curve was never attacked.")
+    return "\n".join(lines) + "\n"
+
+
+def _cmd_dlp_audit(args: argparse.Namespace) -> int:
+    study: ScalingStudy | None = None
+    if not args.skip_measurement:
+        sizes = _parse_widths(args.sizes, default=(12, 16, 20, 24, 28, 32), label="--sizes")
+        if args.trials < 1:
+            raise InputValidationError("--trials must be at least 1")
+        study = measure_scaling(sizes, trials=args.trials)
+    assessment = assess_dlp_refutation(
+        study=study, address=args.address, measure=not args.skip_measurement
+    )
+    _LOGGER.info("discrete logarithm audit completed")
+
+    if args.report_format == "json":
+        payload: dict[str, object] = assessment.as_dict()
+        if study is not None:
+            payload["measurement"] = study.as_dict()
+        text = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+    if args.report_format == "csv":
+        rows: list[dict[str, str]] = []
+        for finding in assessment.audit.findings:
+            rows.append(
+                {
+                    "section": "audit",
+                    "key": finding.code,
+                    "value": finding.measured,
+                    "verdict": "exploitable" if finding.exploitable else "not exploitable",
+                }
+            )
+        for rebuttal in assessment.rebuttals:
+            rows.append(
+                {
+                    "section": "claim",
+                    "key": rebuttal.code,
+                    "value": rebuttal.claim,
+                    "verdict": "fails",
+                }
+            )
+        for falsifier in assessment.falsifiers:
+            rows.append(
+                {
+                    "section": "falsifier",
+                    "key": falsifier.code,
+                    "value": falsifier.observation,
+                    "verdict": "would refute",
+                }
+            )
+        if study is not None:
+            for point in study.fit.points:
+                rows.append(
+                    {
+                        "section": "measurement",
+                        "key": f"{point.bits}-bit",
+                        "value": f"median_steps={point.median_steps:.0f}",
+                        "verdict": f"ratio={point.ratio:.3f}",
+                    }
+                )
+        text = _render_csv_rows(("section", "key", "value", "verdict"), rows)
+        return _emit_batch(text, output=args.output, overwrite=args.overwrite)
+    return _emit_batch(
+        _render_dlp_text(assessment, study), output=args.output, overwrite=args.overwrite
+    )
 
 
 # ---------------------------------------------------------------------------
